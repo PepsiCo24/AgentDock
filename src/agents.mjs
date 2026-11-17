@@ -1,0 +1,389 @@
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { InputError, resolveProjectFile, Store } from './core.mjs';
+import { createIsolatedWorktree, mirrorAttachments, worktreeChanges } from './worktrees.mjs';
+
+export const AGENT_CONFIGS = [
+  { id: 'demo', name: 'Demo Agent', short: 'DE', color: '#eac08b', description: '本地演示 · 不消耗模型额度' },
+  { id: 'codex', name: 'Codex', short: 'CX', color: '#8ea9f3', description: 'OpenAI Codex CLI' },
+  { id: 'claude', name: 'Claude Code', short: 'CL', color: '#de9977', description: 'Anthropic Claude Code CLI' },
+  { id: 'antigravity', name: 'Antigravity', short: 'AG', color: '#91c5aa', description: 'Google Antigravity CLI' }
+];
+const COMMANDS = { codex: 'codex', claude: 'claude', antigravity: 'agy' };
+const MODES = new Set(['plan', 'edit']);
+const WORKSPACE_MODES = new Set(['project', 'worktree']);
+const MAX_WORKTREES_PER_SESSION = 30;
+const MAX_OUTPUT = 100_000;
+
+function hasCommand(command) {
+  const result = spawnSync(process.platform === 'win32' ? 'where' : 'which', [command], { stdio: 'ignore' });
+  return result.status === 0;
+}
+export function installedAgents() {
+  return AGENT_CONFIGS.map(agent => ({
+    ...agent, installed: agent.id === 'demo' || hasCommand(COMMANDS[agent.id]),
+    mode: agent.id === 'demo' ? 'demo' : 'local-cli'
+  }));
+}
+
+/** Non-authenticating local CLI presence/version check. Never returns executable paths or env. */
+export function agentDiagnostics() {
+  return AGENT_CONFIGS.map(agent => {
+    if (agent.id === 'demo') return { id: agent.id, installed: true, version: 'built-in', auth: 'not-required' };
+    const command = COMMANDS[agent.id];
+    if (!hasCommand(command)) return { id: agent.id, installed: false, version: null, auth: 'not-checked' };
+    const result = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 2500, maxBuffer: 32 * 1024, windowsHide: true, env: { ...process.env, NO_COLOR: '1' } });
+    const version = result.status === 0
+      ? String(result.stdout || result.stderr || '').split(/[\r\n]/).find(Boolean)?.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 120) || 'unknown'
+      : null;
+    return { id: agent.id, installed: true, version, auth: 'not-checked', check: result.status === 0 ? 'ok' : 'version-unavailable' };
+  });
+}
+
+export function buildInvocation(session, projectPath, prompt, mode = 'plan') {
+  if (!MODES.has(mode)) throw new InputError('未知执行模式');
+  switch (session.agentId) {
+    case 'codex': {
+      const args = ['exec', '--json', '--sandbox', mode === 'plan' ? 'read-only' : 'workspace-write', '--skip-git-repo-check'];
+      if (session.remoteId) args.push('resume', session.remoteId);
+      args.push('-');
+      return { command: 'codex', args, input: prompt, cwd: projectPath };
+    }
+    case 'claude': {
+      const args = ['-p', '--verbose', '--output-format', 'stream-json', '--permission-mode', mode === 'plan' ? 'plan' : 'acceptEdits'];
+      if (session.remoteId) args.push('--resume', session.remoteId);
+      args.push(prompt);
+      return { command: 'claude', args, input: null, cwd: projectPath };
+    }
+    case 'antigravity': {
+      const args = ['-p', prompt, '--output-format', 'stream-json', '--mode', mode === 'plan' ? 'plan' : 'accept-edits'];
+      if (session.remoteId) args.push('--conversation', session.remoteId);
+      return { command: 'agy', args, input: null, cwd: projectPath };
+    }
+    default: throw new InputError('不支持的 Agent');
+  }
+}
+
+function safeUsage(usage) {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const fields = ['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_read_input_tokens', 'total_tokens', 'thinking_tokens'];
+  const out = {};
+  for (const k of fields) if (Number.isFinite(usage[k]) && usage[k] >= 0) out[k] = Math.trunc(usage[k]);
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Never surface raw tool inputs, command lines or reasoning in UI activity records.
+export function interpretEvent(agentId, event) {
+  if (!event || typeof event !== 'object') return {};
+  if (agentId === 'codex') {
+    if (event.type === 'thread.started' && typeof event.thread_id === 'string') return { remoteId: event.thread_id, activity: '新建 Codex 会话' };
+    if (event.type === 'turn.started') return { activity: '开始运行' };
+    if ((event.type === 'item.started' || event.type === 'item.completed') && event.item?.type && event.item.type !== 'agent_message') {
+      const kind = String(event.item.type).slice(0, 40);
+      return { activity: `${kind} · ${event.type.endsWith('completed') ? '完成' : '运行中'}` };
+    }
+    if (event.type === 'item.completed' && event.item?.type === 'agent_message') return { append: event.item.text || '' };
+    if (event.type === 'turn.completed') return { usage: safeUsage(event.usage), activity: '任务完成' };
+    if (event.type === 'turn.failed' || event.type === 'error') return { error: 'Codex 返回错误，请检查本地 CLI 终端日志', activity: '任务错误' };
+  }
+  if (agentId === 'claude') {
+    const remoteId = typeof event.session_id === 'string' ? event.session_id : undefined;
+    if (event.type === 'system' && event.subtype === 'init') return { remoteId, activity: 'Claude Code 已连接' };
+    if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
+      const txt = event.message.content.filter(x => x?.type === 'text').map(x => x.text || '').join('\n');
+      const hasTools = event.message.content.some(x => x?.type === 'tool_use');
+      return { remoteId, ...(txt ? { current: txt } : {}), ...(hasTools ? { activity: '使用工具' } : {}) };
+    }
+    if (event.type === 'result') return {
+      remoteId, final: typeof event.result === 'string' ? event.result : '',
+      usage: safeUsage(event.usage),
+      error: event.is_error ? 'Claude Code 任务失败，请检查本地 CLI 终端日志' : undefined,
+      activity: event.is_error ? '任务错误' : '任务完成'
+    };
+    return remoteId ? { remoteId } : {};
+  }
+  if (agentId === 'antigravity') {
+    if (event.event === 'init') return { remoteId: event.conversation_id, activity: 'Antigravity 已连接' };
+    if (event.event === 'step_update') {
+      const step = event.step_update || {};
+      if (step.step_type === 'agent_response') return { append: step.text_delta || '', usage: safeUsage(step.usage) };
+      return { activity: `${String(step.step_type || '工具').slice(0, 30)} · ${String(step.state || '进行中').slice(0, 15)}`, usage: safeUsage(step.usage) };
+    }
+    if (event.event === 'result') return {
+      remoteId: event.result?.conversation_id,
+      final: event.result?.response || '', usage: safeUsage(event.result?.usage),
+      error: event.result?.status === 'SUCCESS' ? undefined : 'Antigravity 任务失败，请检查本地 CLI 终端日志',
+      activity: '任务完成'
+    };
+  }
+  return {};
+}
+
+export class Runner extends EventEmitter {
+  constructor(store, { demoDelay = 900, maxRunMs = 30 * 60 * 1000, maxConcurrent = 3, spawnImpl = spawn } = {}) {
+    super();
+    this.store = store;
+    this.active = new Map();
+    this.awaiting = new Map();
+    this.demoDelay = demoDelay;
+    this.maxRunMs = maxRunMs;
+    this.maxConcurrent = Math.max(1, Math.min(8, Number(maxConcurrent) || 3));
+    this.spawnImpl = spawnImpl;
+  }
+  emitUpdate(session) {
+    this.emit('change', { sessionId: session.id, status: session.status, queueLength: session.queue.length });
+  }
+  activity(session, label) {
+    session.activity = [...(session.activity || []), { at: new Date().toISOString(), label: String(label).slice(0, 90) }].slice(-30);
+    this.store.save();
+    this.emitUpdate(session);
+  }
+  send(sessionId, text, attachments = [], mode = 'plan', workspaceMode = 'project') {
+    const session = this.store.session(sessionId);
+    const project = this.store.project(session.projectId);
+    const content = Store.messageText(text);
+    if (!MODES.has(mode)) throw new InputError('模式必须为 plan 或 edit');
+    if (!WORKSPACE_MODES.has(workspaceMode) || (workspaceMode === 'worktree' && mode !== 'edit')) {
+      throw new InputError('隔离 Git worktree 仅能用于可写任务');
+    }
+    if (workspaceMode === 'worktree' && (session.workspaces?.length || 0) >= MAX_WORKTREES_PER_SESSION) {
+      throw new InputError('当前会话已保留 30 个隔离工作区，请先人工清理旧工作区', 409);
+    }
+    if (!Array.isArray(attachments) || attachments.length > 12 || attachments.some(a => typeof a !== 'string')) {
+      throw new InputError('最多附加 12 个有效文件');
+    }
+    const resolved = attachments.map(file => {
+      const real = resolveProjectFile(project.path, file);
+      if (!fs.statSync(real).isFile()) throw new InputError('附件必须是文件');
+      if (fs.statSync(real).size > 10 * 1024 * 1024) throw new InputError('附件文件超过 10MB 限制', 413);
+      return real;
+    });
+    this.store.addMessage(session, 'user', content, { attachments, mode, workspaceMode });
+    if (session.title === '新会话') session.title = content.split('\n')[0].slice(0, 46);
+    session.queue.push({ id: randomUUID(), prompt: content, attachments: resolved, mode, workspaceMode });
+    this.store.save();
+    this.emitUpdate(session);
+    const queued = this.active.has(sessionId) || this.awaiting.has(sessionId) || session.queue.length > 1;
+    if (!queued) void this.runNext(sessionId);
+    return { queued: queued || session.status === 'queued', queueLength: session.queue.length, sessionId, approvalRequired: mode === 'edit', workspaceMode };
+  }
+  approve(sessionId, jobId) {
+    const session = this.store.session(sessionId);
+    const job = this.awaiting.get(sessionId);
+    if (!job || job.id !== jobId) throw new InputError('授权已失效或任务编号不匹配', 409);
+    this.awaiting.delete(sessionId);
+    session.pendingApproval = null;
+    this.activity(session, '用户批准本次可写任务');
+    // A previously approved job may have to wait for the global CLI concurrency slot.
+    job.approved = true;
+    session.queue.unshift(job);
+    session.status = 'queued';
+    this.store.save();
+    this.schedule();
+    return { started: this.active.has(sessionId), queued: !this.active.has(sessionId) };
+  }
+  reject(sessionId, jobId) {
+    const session = this.store.session(sessionId);
+    const job = this.awaiting.get(sessionId);
+    if (!job || job.id !== jobId) throw new InputError('授权已失效或任务编号不匹配', 409);
+    this.awaiting.delete(sessionId);
+    session.pendingApproval = null;
+    session.status = 'idle';
+    this.store.addMessage(session, 'system', '用户拒绝了本次可写任务，Agent 未执行。');
+    this.activity(session, '用户拒绝本次可写任务');
+    void this.runNext(sessionId);
+    return { rejected: true };
+  }
+  stop(sessionId) {
+    const session = this.store.session(sessionId);
+    const active = this.active.get(sessionId);
+    const queued = session.queue.length > 0;
+    const waiting = this.awaiting.delete(sessionId);
+    session.pendingApproval = null;
+    session.queue = [];
+    if (active) {
+      active.cancelled = true;
+      if (active.resolveDemo) active.resolveDemo();
+      if (active.child && active.child.exitCode === null) {
+        try { active.child.kill('SIGINT'); } catch { /* exited */ }
+        active.forceKill = setTimeout(() => {
+          if (active.child && active.child.exitCode === null) active.child.kill('SIGKILL');
+        }, 1800);
+        active.forceKill.unref?.();
+      }
+    } else {
+      session.status = 'stopped';
+      if (waiting) this.store.addMessage(session, 'system', '待授权任务已取消，未执行。');
+    }
+    this.store.save();
+    this.emitUpdate(session);
+    this.schedule();
+    return { stopped: Boolean(active || waiting || queued) };
+  }
+  schedule() {
+    for (const session of this.store.state.sessions) {
+      if (this.active.size >= this.maxConcurrent) break;
+      if (session.queue.length && !this.active.has(session.id) && !this.awaiting.has(session.id)) {
+        void this.runNext(session.id);
+      }
+    }
+  }
+  async runNext(sessionId) {
+    if (this.active.has(sessionId) || this.awaiting.has(sessionId)) return;
+    const session = this.store.session(sessionId);
+    if (this.active.size >= this.maxConcurrent) {
+      if (session.queue.length) {
+        session.status = 'queued';
+        this.store.save();
+        this.emitUpdate(session);
+      }
+      return;
+    }
+    const job = session.queue.shift();
+    if (!job) return;
+    if (job.mode === 'edit' && !job.approved) {
+      this.awaiting.set(sessionId, job);
+      session.status = 'awaiting_approval';
+      session.pendingApproval = { id: job.id, summary: job.prompt.slice(0, 180), workspaceMode: job.workspaceMode, createdAt: new Date().toISOString() };
+      this.activity(session, '等待用户批准可写任务');
+      return;
+    }
+    await this.runJob(sessionId, job);
+  }
+  async runJob(sessionId, job) {
+    if (this.active.has(sessionId)) throw new Error('Session already running');
+    const session = this.store.session(sessionId);
+    const active = { cancelled: false, child: null, forceKill: null, resolveDemo: null };
+    this.active.set(sessionId, active);
+    const started = Date.now();
+    session.status = 'running';
+    session.pendingApproval = null;
+    session.draft = '';
+    session.lastRun = { mode: job.mode, workspaceMode: job.workspaceMode || 'project', startedAt: new Date(started).toISOString(), usage: null, outcome: 'running', durationMs: null };
+    this.activity(session, `开始 ${job.mode === 'edit' ? '可写' : '受限'}任务`);
+    let output = '';
+    let error = '';
+    const previousRemoteId = session.remoteId;
+    let isolated = null;
+    const update = part => {
+      if (part.remoteId && typeof part.remoteId === 'string') {
+        if (isolated) isolated.remoteId = part.remoteId;
+        else session.remoteId = part.remoteId;
+      }
+      if (typeof part.current === 'string') output = part.current;
+      if (typeof part.append === 'string') output += part.append;
+      if (typeof part.final === 'string') output = part.final;
+      if (part.error) error = part.error;
+      if (part.usage) session.lastRun.usage = part.usage;
+      if (part.activity) this.activity(session, part.activity);
+      output = output.slice(-MAX_OUTPUT);
+      session.draft = output;
+      this.store.save();
+      this.emitUpdate(session);
+    };
+    try {
+      const project = this.store.project(session.projectId);
+      let cwd = project.path;
+      let attachments = job.attachments || [];
+      if (job.workspaceMode === 'worktree') {
+        isolated = createIsolatedWorktree({ projectRoot: project.path, dataDir: this.store.dir, jobId: job.id });
+        session.workspaces ??= [];
+        session.workspaces.push(isolated);
+        session.lastRun.workspace = { ...isolated };
+        cwd = isolated.path;
+        attachments = mirrorAttachments(project.path, cwd, attachments);
+        this.activity(session, 'Git 隔离工作区已创建（基于 HEAD，不复制未提交修改）');
+      }
+      const appendix = attachments.length ? '\n\nAttached local project files:\n' + attachments.map(f => `- ${f}`).join('\n') : '';
+      const prompt = job.prompt + appendix;
+      if (session.agentId === 'demo') {
+        await new Promise(resolve => {
+          const timer = setTimeout(resolve, this.demoDelay);
+          active.resolveDemo = () => { clearTimeout(timer); resolve(); };
+        });
+        if (!active.cancelled) output = `Demo Agent 完成 ${job.mode === 'edit' ? '授权写入' : '受限'}模拟任务。此模式不执行真实 CLI，也不会修改项目文件。`;
+      } else {
+        // Isolated jobs start fresh CLI conversations, so a thread from the original
+        // directory cannot accidentally re-use its original working directory.
+        const invocationSession = isolated ? { ...session, remoteId: null } : session;
+        const spec = buildInvocation(invocationSession, cwd, prompt, job.mode);
+        await new Promise(resolve => {
+          let finished = false;
+          let buffer = '';
+          let timer;
+          const finish = code => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            if (code !== 0 && !active.cancelled && !error) error = `Agent 退出代码 ${code ?? '未知'}，请在本机终端检查 CLI 状态`;
+            resolve();
+          };
+          let child;
+          try {
+            child = this.spawnImpl(spec.command, spec.args, {
+              cwd: spec.cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
+              windowsHide: true, env: { ...process.env, NO_COLOR: '1' }
+            });
+          } catch (err) { error = err.message; resolve(); return; }
+          active.child = child;
+          timer = setTimeout(() => {
+            error = '任务运行超时，已终止';
+            child.kill('SIGKILL');
+          }, this.maxRunMs);
+          timer.unref?.();
+          child.on('error', err => {
+            error = err.code === 'ENOENT' ? `${spec.command} CLI 未安装或不在 PATH 中` : '启动 CLI 失败';
+            finish(-1);
+          });
+          child.stdout.on('data', chunk => {
+            buffer += chunk.toString('utf8');
+            if (buffer.length > 1024 * 1024) { error = 'Agent 单条输出超过安全限制'; child.kill('SIGKILL'); return; }
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              try { update(interpretEvent(session.agentId, JSON.parse(line))); }
+              catch { /* ignore unrecognized event */ }
+            }
+          });
+          // STDERR may contain secrets/command outputs; do not echo it into the UI.
+          child.stderr.on('data', () => {});
+          child.on('close', code => {
+            if (buffer.trim()) {
+              try { update(interpretEvent(session.agentId, JSON.parse(buffer))); }
+              catch { /* partial trailing line */ }
+            }
+            finish(code);
+          });
+          if (spec.input === null) child.stdin.end();
+          else child.stdin.end(spec.input);
+          child.stdin.on('error', () => {});
+        });
+      }
+    } catch (err) { error = err instanceof InputError ? err.message : 'Agent 运行异常，请检查本地 CLI'; }
+    finally {
+      if (isolated) {
+        session.remoteId = previousRemoteId;
+        try {
+          const changes = worktreeChanges(isolated);
+          isolated.changedCount = changes.changed.length;
+          session.lastRun.workspace = { ...isolated };
+        } catch { /* preserve worktree for manual inspection even when git status fails */ }
+      }
+      if (active.forceKill) clearTimeout(active.forceKill);
+      session.status = active.cancelled ? 'stopped' : error ? 'failed' : 'idle';
+      session.lastRun.outcome = active.cancelled ? 'stopped' : error ? 'failed' : 'completed';
+      session.lastRun.durationMs = Date.now() - started;
+      session.lastRun.finishedAt = new Date().toISOString();
+      if (output.trim() && !active.cancelled) this.store.addMessage(session, 'assistant', output.trim());
+      if (error && !active.cancelled) this.store.addMessage(session, 'system', error);
+      if (active.cancelled) this.store.addMessage(session, 'system', '任务已停止，后续队列已清空。');
+      session.draft = '';
+      this.active.delete(sessionId);
+      this.activity(session, `任务${session.lastRun.outcome === 'completed' ? '完成' : session.lastRun.outcome === 'failed' ? '失败' : '停止'}`);
+      this.schedule();
+    }
+  }
+}

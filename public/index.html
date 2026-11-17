@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="theme-color" content="#0e121c"/>
+  <title>AgentDock — 多 Agent 工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+  <link rel="stylesheet" href="/styles.css"/>
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <div id="app" class="app">
+    <aside class="agents" aria-label="Agent 选择">
+      <div class="brandmark" title="AgentDock">A<span>·</span></div>
+      <div class="agent-tabs" id="agent-tabs"></div>
+      <div class="agent-bottom"><span class="live-indicator"></span><span>LOCAL</span></div>
+    </aside>
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <div><div class="eyebrow">YOUR WORKSPACE</div><h1>Agent<span>Dock</span></h1></div>
+        <div class="version">v0.2</div>
+      </header>
+      <div class="project-section">
+        <div class="section-title"><span>当前项目</span><button class="mini-button" id="add-project" title="添加本地项目" aria-label="添加本地项目">＋</button></div>
+        <div class="select-wrap"><select id="project-select" aria-label="选择项目"></select><span class="select-arrow">⌄</span></div>
+        <p class="project-path" id="project-path"></p>
+      </div>
+      <div class="sessions-header"><span>会话</span><button id="new-session" class="small-outline">＋ 新建会话</button></div>
+      <div class="session-list" id="session-list"></div>
+      <div class="sidebar-foot"><button id="diagnose-agents" class="small-outline" title="仅在本机检查 CLI --version，不检测登录状态">检查 Agent CLI</button><span class="foot-icon">◎</span> 本地运行 · 数据不上传 AgentDock</div>
+    </aside>
+    <main class="main">
+      <header class="main-header">
+        <div class="header-agent"><span class="header-avatar" id="header-avatar">DE</span><div><div class="header-title" id="header-title">Demo Agent</div><div class="header-subtitle" id="header-subtitle">准备就绪</div></div></div>
+        <div class="header-actions"><span class="mode-pill">● 本地优先</span><button id="open-window" class="icon-button" title="在独立浏览器窗口打开当前会话">↗</button><button id="toggle-inspector" class="icon-button" title="显示或隐藏文件面板">▣</button></div>
+      </header>
+      <section class="conversation" id="conversation" aria-label="聊天消息"></section>
+      <section id="approval-panel" class="approval-panel" hidden aria-live="polite"><div class="approval-copy"><strong>本次任务申请修改项目文件</strong><p id="approval-summary"></p><span>这是任务级执行授权，并非逐条工具调用审批。请仅对可信项目批准。</span></div><div class="approval-actions"><button id="reject-task" class="stop-button">拒绝</button><button id="approve-task" class="send-button">批准本次任务</button></div></section>
+      <div class="composer-shell" id="drop-target">
+        <div id="attachment-chips" class="attachments"></div>
+        <textarea id="composer" rows="3" placeholder="给 Agent 发送任务，支持粘贴路径或拖入文件..." aria-label="发送给 Agent 的消息"></textarea>
+        <div class="composer-toolbar"><div class="composer-left"><select id="execution-mode" class="execution-mode" aria-label="任务执行模式"><option value="plan">受限 / 计划</option><option value="edit">允许修改项目</option></select><label class="worktree-choice" title="仅可写任务：从 Git HEAD 创建独立工作区，不会自动把修改合并回原项目"><input id="use-worktree" type="checkbox" disabled/> Git 隔离工作区</label><button id="attach-file" class="toolbar-button" title="上传本地文件">＋ 添加文件</button><span class="toolbar-hint">Enter 发送 · Shift+Enter 换行</span></div><div class="composer-right"><span id="queue-indicator" class="queue-indicator"></span><button id="stop-task" class="stop-button" hidden>■ 停止</button><button id="send-message" class="send-button">发送 <span>↵</span></button></div></div>
+        <input id="upload-input" type="file" multiple hidden />
+      </div>
+      <footer class="main-foot">AgentDock 在本机执行 Agent CLI。模型权限和计费仍由各服务商管理。</footer>
+    </main>
+    <aside class="inspector" id="inspector">
+      <header class="inspector-header"><div><div class="eyebrow">EXPLORER</div><h2>项目文件</h2></div><button id="reload-files" class="icon-button" title="刷新文件列表">↻</button></header>
+      <div class="file-search"><input id="file-search" type="search" placeholder="搜索文件名..." aria-label="搜索项目文件名"/><button id="clear-search" class="mini-button" title="清除搜索">×</button></div><div class="file-breadcrumb"><button id="files-back" class="icon-button" title="返回上级目录">←</button><span id="current-dir">/</span></div>
+      <div id="file-list" class="file-list"></div>
+      <section class="preview-section" id="preview-section"><div class="preview-heading"><span>PREVIEW</span><button class="icon-button" id="close-preview" title="关闭预览">×</button></div><div class="preview-title" id="preview-title">选择文件预览</div><div class="preview-content" id="preview-content"><div class="preview-empty">选择文件即可在侧边预览</div></div><div class="preview-actions"><button id="attach-preview" class="small-outline">＋ 附加到对话</button><button id="reveal-preview" class="small-outline">在文件管理器中显示 ↗</button><button id="download-preview" class="small-outline">下载副本 ↓</button></div></section>
+      <section class="activity-section"><div class="preview-heading">运行活动 · 最近一次任务</div><div id="run-metrics" class="run-metrics">暂无执行记录</div><div id="activity-list" class="activity-list"></div></section><div class="explorer-foot">可拖动文件到消息框，或点击文件预览</div>
+    </aside>
+  </div>
+  <dialog id="project-dialog"><form method="dialog" id="project-form"><div class="dialog-eyebrow">NEW WORKSPACE</div><h2>添加本地项目</h2><p>选择一个你信任的本地目录。Agent 可能会在该目录内修改代码。</p><label>项目名称<input name="name" autocomplete="off" placeholder="例如：我的应用" required maxlength="120"/></label><label>绝对路径<input name="path" autocomplete="off" placeholder="/Users/you/projects/my-app" required/></label><div class="dialog-actions"><button type="button" id="cancel-project" class="small-outline">取消</button><button type="submit" class="send-button">添加项目</button></div></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
