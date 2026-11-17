@@ -7,6 +7,8 @@ const now = () => new Date().toISOString();
 const MAX_PROJECTS = 100;
 const MAX_SESSIONS = 1000;
 const MAX_MESSAGES = 500;
+const MAX_RUNS = 150;
+const NON_TERMINAL_RUNS = new Set(['queued', 'awaiting_approval', 'running']);
 
 export class InputError extends Error {
   constructor(message, status = 400) {
@@ -57,7 +59,31 @@ export class Store {
     }
     this.state = state;
     for (const s of this.state.sessions) {
-      if (s.status === 'running' || s.status === 'awaiting_approval') s.status = 'interrupted';
+      if (['running', 'awaiting_approval', 'queued'].includes(s.status)) s.status = 'interrupted';
+      if (!Array.isArray(s.runs)) {
+        // V0.3 migration: preserve its last run even though a recoverable prompt
+        // link was not recorded. Never pretend this legacy entry is retryable.
+        s.runs = s.lastRun ? [{
+          id: randomUUID(), messageId: null, status: s.lastRun.outcome || 'interrupted',
+          promptPreview: 'V0.3 历史任务（无重试凭据）', mode: s.lastRun.mode,
+          workspaceMode: s.lastRun.workspaceMode || 'project',
+          createdAt: s.lastRun.startedAt || s.updatedAt || now(),
+          startedAt: s.lastRun.startedAt || null, finishedAt: s.lastRun.finishedAt || null,
+          durationMs: s.lastRun.durationMs ?? null, usage: s.lastRun.usage || null,
+          workspaceId: s.lastRun.workspace?.id || null, legacy: true
+        }] : [];
+      }
+      for (const run of s.runs) {
+        if (NON_TERMINAL_RUNS.has(run.status)) {
+          run.status = 'interrupted';
+          run.finishedAt = now();
+          run.error = 'AgentDock 重启，任务不会自动重放';
+        }
+      }
+      if (s.lastRun?.outcome === 'running') {
+        s.lastRun.outcome = 'interrupted';
+        s.lastRun.finishedAt = now();
+      }
       s.pendingApproval = null;
       s.activity ??= [];
       s.lastRun ??= null;
@@ -79,11 +105,48 @@ export class Store {
 
   projects() { return this.state.projects; }
   sessions() {
-    return this.state.sessions.map(({ messages, queue, draft, ...session }) => ({ ...session, queueLength: queue.length, messageCount: messages.length }));
+    return this.state.sessions.map(({ messages, queue, draft, runs, ...session }) => ({ ...session, queueLength: queue.length, messageCount: messages.length }));
   }
   sessionView(id) {
-    const { queue, ...session } = this.session(id);
+    const { queue, runs, ...session } = this.session(id);
     return { ...session, queueLength: queue.length };
+  }
+  addRun(session, job, messageId) {
+    const entry = {
+      id: job.id, messageId, status: 'queued', mode: job.mode,
+      workspaceMode: job.workspaceMode, promptPreview: job.prompt.slice(0, 160),
+      createdAt: now(), approvedAt: null, startedAt: null, finishedAt: null,
+      durationMs: null, usage: null, workspaceId: null, error: null,
+      retryOf: job.retryOf || null
+    };
+    session.runs ??= [];
+    session.runs.unshift(entry);
+    session.runs = session.runs.slice(0, MAX_RUNS);
+    this.save();
+    return entry;
+  }
+  updateRun(session, id, patch) {
+    const record = session.runs?.find(run => run.id === id);
+    if (!record) return null; // A very long-running session may prune old entries.
+    Object.assign(record, patch);
+    this.save();
+    return record;
+  }
+  runs(sessionId, { limit = 20, offset = 0 } = {}) {
+    const session = this.session(sessionId);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50 ||
+        !Number.isInteger(offset) || offset < 0 || offset > MAX_RUNS) {
+      throw new InputError('执行历史分页参数无效');
+    }
+    const all = session.runs || [];
+    return {
+      total: all.length, limit, offset,
+      items: all.slice(offset, offset + limit).map(run => ({
+        ...run,
+        retryable: ['failed', 'interrupted'].includes(run.status) &&
+          Boolean(session.messages.some(m => m.id === run.messageId && m.role === 'user'))
+      }))
+    };
   }
   project(id) {
     const found = this.state.projects.find(p => p.id === id);
@@ -124,7 +187,7 @@ export class Store {
       id: randomUUID(), projectId: body.projectId, agentId: body.agentId,
       title: typeof body?.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 120) : '新会话',
       status: 'idle', remoteId: null, queue: [], messages: [], draft: '',
-      pendingApproval: null, lastRun: null, activity: [], workspaces: [], createdAt: now(), updatedAt: now()
+      pendingApproval: null, lastRun: null, runs: [], activity: [], workspaces: [], createdAt: now(), updatedAt: now()
     };
     this.state.sessions.unshift(session);
     this.save();

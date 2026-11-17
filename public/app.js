@@ -8,11 +8,13 @@ const ui = {
   previewContent: q('#preview-content'), inspector: q('#inspector'), dialog: q('#project-dialog'),
   toast: q('#toast'), uploadInput: q('#upload-input'),
   approvalPanel: q('#approval-panel'), approvalSummary: q('#approval-summary'), mode: q('#execution-mode'),
-  activityList: q('#activity-list'), runMetrics: q('#run-metrics'), search: q('#file-search'), worktree: q('#use-worktree')
+  activityList: q('#activity-list'), runMetrics: q('#run-metrics'), search: q('#file-search'), worktree: q('#use-worktree'),
+  runHistory: q('#run-history'), historyCount: q('#history-count'), historyMore: q('#history-more')
 };
 const state = {
   token: '', agents: [], projects: [], sessions: [], session: null, agentId: 'demo', projectId: null,
-  currentDir: '.', files: [], attachments: [], preview: null, connected: false, reloading: false, searchText: ''
+  currentDir: '.', files: [], attachments: [], preview: null, connected: false, reloading: false, searchText: '',
+  runHistory: [], historyTotal: 0
 };
 let refreshTimer = null;
 let toastTimer = null;
@@ -219,10 +221,30 @@ function renderActivity() {
     const changesButton = node('button', 'small-outline', '查看更改');
     changesButton.onclick = async () => {
       try {
-        const data = await api(`/api/sessions/${state.session.id}/workspaces/${workspace.id}/changes`);
-        let lines = data.changed.map(f => `${f.status} ${f.path}`);
-        if (data.truncated) lines.push('...后续更改已截断');
-        const details = node('pre', 'workspace-changes', lines.join('\n') || '没有检测到文件修改');
+        const sessionId = state.session.id;
+        const route = `/api/sessions/${sessionId}/workspaces/${workspace.id}`;
+        const data = await api(`${route}/changes`);
+        if (state.session?.id !== sessionId) return;
+        const details = node('div', 'workspace-changes');
+        if (!data.changed.length) details.append(node('p', 'workspace-empty', '没有检测到文件修改'));
+        for (const file of data.changed) {
+          const row = node('div', 'workspace-change-row');
+          const btn = node('button', 'workspace-change-file', `${file.status} ${file.path}`);
+          btn.title = '查看本文件的差异';
+          btn.onclick = async () => {
+            try {
+              const diff = await api(`${route}/diff?path=${encodeURIComponent(file.path)}`);
+              if (state.session?.id !== sessionId) return;
+              const oldDiff = details.querySelector('.file-diff');
+              if (oldDiff) oldDiff.remove();
+              const pre = node('pre', 'file-diff', diff.content + (diff.truncated ? '\n…显示已截断，请在本机编辑器中审查完整文件' : ''));
+              details.append(pre);
+            } catch (err) { toast(err.message); }
+          };
+          row.append(btn);
+          details.append(row);
+        }
+        if (data.truncated) details.append(node('p', 'workspace-empty', '超过显示上限，后续更改已截断'));
         const old = info.querySelector('.workspace-changes');
         if (old) old.remove();
         info.append(details);
@@ -243,8 +265,64 @@ function renderActivity() {
     ui.activityList.append(item);
   }
 }
+function runStatusText(status) {
+  return ({ queued: '排队中', awaiting_approval: '待授权', running: '执行中',
+    completed: '已完成', failed: '失败', interrupted: '重启中断',
+    stopped: '已停止', rejected: '已拒绝' })[status] || status;
+}
+function renderHistory() {
+  clear(ui.runHistory);
+  ui.historyCount.textContent = state.session ? `${state.historyTotal} 次` : '';
+  ui.historyMore.hidden = !state.session || state.runHistory.length >= state.historyTotal;
+  if (!state.session || !state.runHistory.length) {
+    ui.runHistory.append(node('div', 'history-empty', '暂无执行历史'));
+    return;
+  }
+  for (const record of state.runHistory) {
+    const item = node('div', 'history-entry');
+    const head = node('div', 'history-head');
+    const when = record.createdAt ? new Date(record.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    head.append(node('span', 'history-time', when), node('span', `history-status status-${record.status}`, runStatusText(record.status)));
+    item.append(head, node('p', 'history-prompt', record.promptPreview || '历史任务'));
+    const details = node('div', 'history-detail', `${record.mode === 'edit' ? '可写' : '受限'} · ${record.workspaceMode === 'worktree' ? 'Git 隔离' : '原项目'}${record.durationMs == null ? '' : ` · ${(record.durationMs / 1000).toFixed(1)}s`}`);
+    item.append(details);
+    if (record.retryable) {
+      const button = node('button', 'small-outline history-retry', '重新执行');
+      button.title = '显式重新提交原指令；可能重复执行已有副作用';
+      button.onclick = async () => {
+        if (!state.session) return;
+        const id = state.session.id;
+        const accepted = window.confirm('重新执行之前失败或中断的任务？先前任务可能已经修改文件，重试可能产生重复副作用。可写任务需要重新授权。');
+        if (!accepted) return;
+        button.disabled = true;
+        try {
+          const result = await api(`/api/sessions/${id}/runs/${record.id}/retry`, { method: 'POST', data: {} });
+          if (state.session?.id !== id) return;
+          await refresh();
+          await loadHistory();
+          toast(result.approvalRequired ? '已重新提交：请审核本次可写任务的授权' : '任务已重新提交');
+        } catch (err) { toast(err.message); }
+        finally { button.disabled = false; }
+      };
+      item.append(button);
+    }
+    ui.runHistory.append(item);
+  }
+}
+async function loadHistory(append = false) {
+  const sid = state.session?.id;
+  if (!sid) { state.runHistory = []; state.historyTotal = 0; renderHistory(); return; }
+  const offset = append ? state.runHistory.length : 0;
+  try {
+    const data = await api(`/api/sessions/${sid}/runs?offset=${offset}&limit=20`);
+    if (state.session?.id !== sid) return;
+    state.runHistory = append ? [...state.runHistory, ...data.items] : data.items;
+    state.historyTotal = data.total;
+    renderHistory();
+  } catch (err) { toast(err.message); }
+}
 function renderAll() {
-  renderAgents(); renderProjects(); renderSessions(); renderHeader(); renderConversation(); renderAttachments(); renderFiles(); renderPreview(); renderActivity();
+  renderAgents(); renderProjects(); renderSessions(); renderHeader(); renderConversation(); renderAttachments(); renderFiles(); renderPreview(); renderActivity(); renderHistory();
 }
 async function refresh({ bootstrap = false } = {}) {
   if (state.reloading) return;
@@ -256,8 +334,12 @@ async function refresh({ bootstrap = false } = {}) {
       state.projectId = state.projectId || data.projects[0]?.id || null;
     } else state.sessions = await api('/api/sessions');
     if (state.session) {
+      const previous = state.session;
       const current = state.sessions.find(s => s.id === state.session.id);
       state.session = current ? await api(`/api/sessions/${current.id}`) : null;
+      if (!state.session || previous.status !== state.session.status ||
+          previous.queueLength !== state.session.queueLength ||
+          previous.lastRun?.finishedAt !== state.session.lastRun?.finishedAt) await loadHistory();
     }
     renderAgents(); renderSessions(); renderHeader(); renderConversation(); renderActivity();
   } catch (err) { toast(err.message); }
@@ -270,11 +352,13 @@ function requestRefresh() {
 async function selectSession(id) {
   try {
     state.session = await api(`/api/sessions/${id}`);
+    state.runHistory = []; state.historyTotal = 0;
     state.agentId = state.session.agentId;
     state.projectId = state.session.projectId;
     state.attachments = [];
     state.currentDir = '.'; state.preview = null; state.searchText = ''; ui.search.value = '';
     await loadFiles();
+    await loadHistory();
     renderAll();
     ui.conversation.scrollTop = ui.conversation.scrollHeight;
   } catch (err) { toast(err.message); }
@@ -283,7 +367,7 @@ async function switchAgent(agentId) {
   state.agentId = agentId;
   const target = sessionsForCurrent()[0];
   if (target) await selectSession(target.id);
-  else { state.session = null; state.attachments = []; renderAll(); }
+  else { state.session = null; state.attachments = []; state.runHistory = []; state.historyTotal = 0; renderAll(); }
 }
 async function switchProject(projectId) {
   state.projectId = projectId;
@@ -291,7 +375,7 @@ async function switchProject(projectId) {
   await loadFiles();
   const s = sessionsForCurrent()[0];
   if (s) await selectSession(s.id);
-  else { state.session = null; renderAll(); }
+  else { state.session = null; state.runHistory = []; state.historyTotal = 0; renderAll(); }
 }
 async function newSession() {
   if (!state.projectId) return toast('请先添加本地项目');
@@ -362,6 +446,7 @@ async function sendMessage() {
   finally { ui.send.disabled = !state.session; }
 }
 function bindUI() {
+  ui.historyMore.onclick = () => void loadHistory(true);
   q('#new-session').onclick = () => void newSession();
   q('#diagnose-agents').onclick = async () => {
     try {
@@ -472,6 +557,7 @@ async function main() {
       state.sessions.unshift(state.session);
     }
     await loadFiles();
+    await loadHistory();
     renderAll();
     const events = new EventSource('/api/events');
     events.onopen = () => { state.connected = true; };

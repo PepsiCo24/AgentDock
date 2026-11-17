@@ -140,7 +140,7 @@ export class Runner extends EventEmitter {
     this.store.save();
     this.emitUpdate(session);
   }
-  send(sessionId, text, attachments = [], mode = 'plan', workspaceMode = 'project') {
+  send(sessionId, text, attachments = [], mode = 'plan', workspaceMode = 'project', retryOf = null) {
     const session = this.store.session(sessionId);
     const project = this.store.project(session.projectId);
     const content = Store.messageText(text);
@@ -160,14 +160,30 @@ export class Runner extends EventEmitter {
       if (fs.statSync(real).size > 10 * 1024 * 1024) throw new InputError('附件文件超过 10MB 限制', 413);
       return real;
     });
-    this.store.addMessage(session, 'user', content, { attachments, mode, workspaceMode });
+    const message = this.store.addMessage(session, 'user', content, { attachments, mode, workspaceMode, ...(retryOf ? { retryOf } : {}) });
     if (session.title === '新会话') session.title = content.split('\n')[0].slice(0, 46);
-    session.queue.push({ id: randomUUID(), prompt: content, attachments: resolved, mode, workspaceMode });
+    const job = { id: randomUUID(), prompt: content, attachments: resolved, mode, workspaceMode, retryOf };
+    this.store.addRun(session, job, message.id);
+    session.queue.push(job);
     this.store.save();
     this.emitUpdate(session);
     const queued = this.active.has(sessionId) || this.awaiting.has(sessionId) || session.queue.length > 1;
     if (!queued) void this.runNext(sessionId);
-    return { queued: queued || session.status === 'queued', queueLength: session.queue.length, sessionId, approvalRequired: mode === 'edit', workspaceMode };
+    return { jobId: job.id, queued: queued || session.status === 'queued', queueLength: session.queue.length, sessionId, approvalRequired: mode === 'edit', workspaceMode };
+  }
+  /** Explicit user-triggered retry only. Never reuses edit approvals or runs on boot. */
+  retry(sessionId, runId) {
+    const session = this.store.session(sessionId);
+    const historical = session.runs?.find(run => run.id === runId);
+    if (!historical) throw new InputError('未找到执行历史', 404);
+    if (!['failed', 'interrupted'].includes(historical.status)) {
+      throw new InputError('只有失败或中断的任务可以重试', 409);
+    }
+    const original = session.messages.find(m => m.id === historical.messageId && m.role === 'user');
+    if (!original) throw new InputError('原始消息已被清理，无法安全重试', 409);
+    // send rechecks that the original attachments still exist within this project.
+    return this.send(sessionId, original.text, original.attachments || [],
+      historical.mode, historical.workspaceMode || 'project', historical.id);
   }
   approve(sessionId, jobId) {
     const session = this.store.session(sessionId);
@@ -178,6 +194,7 @@ export class Runner extends EventEmitter {
     this.activity(session, '用户批准本次可写任务');
     // A previously approved job may have to wait for the global CLI concurrency slot.
     job.approved = true;
+    this.store.updateRun(session, job.id, { status: 'queued', approvedAt: new Date().toISOString() });
     session.queue.unshift(job);
     session.status = 'queued';
     this.store.save();
@@ -191,6 +208,7 @@ export class Runner extends EventEmitter {
     this.awaiting.delete(sessionId);
     session.pendingApproval = null;
     session.status = 'idle';
+    this.store.updateRun(session, job.id, { status: 'rejected', finishedAt: new Date().toISOString(), durationMs: 0 });
     this.store.addMessage(session, 'system', '用户拒绝了本次可写任务，Agent 未执行。');
     this.activity(session, '用户拒绝本次可写任务');
     void this.runNext(sessionId);
@@ -199,10 +217,15 @@ export class Runner extends EventEmitter {
   stop(sessionId) {
     const session = this.store.session(sessionId);
     const active = this.active.get(sessionId);
-    const queued = session.queue.length > 0;
+    const queued = [...session.queue];
+    const waitingJob = this.awaiting.get(sessionId);
     const waiting = this.awaiting.delete(sessionId);
     session.pendingApproval = null;
     session.queue = [];
+    const finishedAt = new Date().toISOString();
+    for (const job of [...queued, ...(waitingJob ? [waitingJob] : [])]) {
+      this.store.updateRun(session, job.id, { status: 'stopped', finishedAt, error: '用户取消，未执行' });
+    }
     if (active) {
       active.cancelled = true;
       if (active.resolveDemo) active.resolveDemo();
@@ -220,7 +243,7 @@ export class Runner extends EventEmitter {
     this.store.save();
     this.emitUpdate(session);
     this.schedule();
-    return { stopped: Boolean(active || waiting || queued) };
+    return { stopped: Boolean(active || waiting || queued.length) };
   }
   schedule() {
     for (const session of this.store.state.sessions) {
@@ -246,6 +269,7 @@ export class Runner extends EventEmitter {
     if (job.mode === 'edit' && !job.approved) {
       this.awaiting.set(sessionId, job);
       session.status = 'awaiting_approval';
+      this.store.updateRun(session, job.id, { status: 'awaiting_approval' });
       session.pendingApproval = { id: job.id, summary: job.prompt.slice(0, 180), workspaceMode: job.workspaceMode, createdAt: new Date().toISOString() };
       this.activity(session, '等待用户批准可写任务');
       return;
@@ -262,6 +286,7 @@ export class Runner extends EventEmitter {
     session.pendingApproval = null;
     session.draft = '';
     session.lastRun = { mode: job.mode, workspaceMode: job.workspaceMode || 'project', startedAt: new Date(started).toISOString(), usage: null, outcome: 'running', durationMs: null };
+    this.store.updateRun(session, job.id, { status: 'running', startedAt: new Date(started).toISOString() });
     this.activity(session, `开始 ${job.mode === 'edit' ? '可写' : '受限'}任务`);
     let output = '';
     let error = '';
@@ -276,7 +301,11 @@ export class Runner extends EventEmitter {
       if (typeof part.append === 'string') output += part.append;
       if (typeof part.final === 'string') output = part.final;
       if (part.error) error = part.error;
-      if (part.usage) session.lastRun.usage = part.usage;
+      if (part.usage) {
+        session.lastRun.usage = part.usage;
+        const record = session.runs?.find(r => r.id === job.id);
+        if (record) record.usage = part.usage;
+      }
       if (part.activity) this.activity(session, part.activity);
       output = output.slice(-MAX_OUTPUT);
       session.draft = output;
@@ -292,6 +321,7 @@ export class Runner extends EventEmitter {
         session.workspaces ??= [];
         session.workspaces.push(isolated);
         session.lastRun.workspace = { ...isolated };
+        this.store.updateRun(session, job.id, { workspaceId: isolated.id });
         cwd = isolated.path;
         attachments = mirrorAttachments(project.path, cwd, attachments);
         this.activity(session, 'Git 隔离工作区已创建（基于 HEAD，不复制未提交修改）');
@@ -377,6 +407,11 @@ export class Runner extends EventEmitter {
       session.lastRun.outcome = active.cancelled ? 'stopped' : error ? 'failed' : 'completed';
       session.lastRun.durationMs = Date.now() - started;
       session.lastRun.finishedAt = new Date().toISOString();
+      this.store.updateRun(session, job.id, {
+        status: session.lastRun.outcome, durationMs: session.lastRun.durationMs,
+        finishedAt: session.lastRun.finishedAt, usage: session.lastRun.usage,
+        error: active.cancelled ? '用户主动停止' : (error || null)
+      });
       if (output.trim() && !active.cancelled) this.store.addMessage(session, 'assistant', output.trim());
       if (error && !active.cancelled) this.store.addMessage(session, 'system', error);
       if (active.cancelled) this.store.addMessage(session, 'system', '任务已停止，后续队列已清空。');

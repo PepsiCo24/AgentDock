@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { InputError, within } from './core.mjs';
 
 const MAX_GIT_OUTPUT = 256 * 1024;
+const MAX_DIFF_CHARS = 72 * 1024;
+const MAX_UNTRACKED_BYTES = 36 * 1024;
 
 function git(cwd, args, timeout = 15000) {
   try {
@@ -83,4 +85,45 @@ export function worktreeChanges(workspace) {
     if (code.includes('R') || code.includes('C')) i++; // porcelain -z includes source path
   }
   return { id: workspace.id, path: canonical, baseCommit: workspace.baseCommit, changed, truncated: changed.length >= 200 };
+}
+
+/** Bounded, text-only preview of one changed file; never mutates the repository. */
+export function worktreeFileDiff(workspace, relative) {
+  if (typeof relative !== 'string' || !relative || relative.includes('\0') || path.isAbsolute(relative)) {
+    throw new InputError('请选择工作区内的有效变更文件');
+  }
+  const changes = worktreeChanges(workspace);
+  const entry = changes.changed.find(item => item.path === relative);
+  if (!entry) throw new InputError('文件不在当前工作区的变更列表中', 404);
+  const root = changes.path;
+  const absolute = path.resolve(root, relative);
+  if (!within(root, absolute)) throw new InputError('不能查看工作区之外的文件', 403);
+  // Git status can include symlinks. Never follow links to outside the worktree.
+  if (fs.existsSync(absolute)) {
+    const info = fs.lstatSync(absolute);
+    if (info.isSymbolicLink()) {
+      return { path: relative, status: entry.status, kind: 'special', content: '符号链接变更不提供文件内容预览', truncated: false };
+    }
+    if (!within(root, fs.realpathSync(absolute))) throw new InputError('文件链接指向工作区之外', 403);
+  }
+  if (entry.status === '??') {
+    if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) {
+      return { path: relative, status: entry.status, kind: 'special', content: '目录或特殊类型文件无法预览', truncated: false };
+    }
+    if (fs.statSync(absolute).size > MAX_UNTRACKED_BYTES) {
+      return { path: relative, status: entry.status, kind: 'too-large', content: '新文件过大，请在本机编辑器中审查', truncated: true };
+    }
+    const bytes = fs.readFileSync(absolute);
+    if (bytes.includes(0)) return { path: relative, status: entry.status, kind: 'binary', content: '二进制文件不提供内容预览', truncated: false };
+    const text = bytes.toString('utf8');
+    const content = `--- /dev/null\n+++ b/${relative}\n` + text.split('\n').map(line => `+${line}`).join('\n');
+    return { path: relative, status: entry.status, kind: 'text', content: content.slice(0, MAX_DIFF_CHARS), truncated: content.length > MAX_DIFF_CHARS };
+  }
+  // HEAD covers staged and unstaged tracked edits without invoking user diff drivers.
+  const raw = git(root, ['-c', 'core.safecrlf=false', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--unified=3', 'HEAD', '--', relative], 8000);
+  if (!raw) return { path: relative, status: entry.status, kind: 'special', content: '没有可显示的文本差异，请检查 Git 索引状态', truncated: false };
+  if (/^Binary files .* differ/m.test(raw) || /^GIT binary patch/m.test(raw)) {
+    return { path: relative, status: entry.status, kind: 'binary', content: '二进制差异不提供内容预览', truncated: false };
+  }
+  return { path: relative, status: entry.status, kind: 'text', content: raw.slice(0, MAX_DIFF_CHARS), truncated: raw.length > MAX_DIFF_CHARS };
 }

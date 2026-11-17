@@ -7,7 +7,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Store, InputError } from '../src/core.mjs';
 import { Runner } from '../src/agents.mjs';
-import { createIsolatedWorktree, mirrorAttachments, worktreeChanges } from '../src/worktrees.mjs';
+import { createIsolatedWorktree, mirrorAttachments, worktreeChanges, worktreeFileDiff } from '../src/worktrees.mjs';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
 const delay = n => new Promise(resolve => setTimeout(resolve, n));
@@ -125,4 +125,35 @@ test('stopping a globally queued task prevents later execution', async t => {
   await until(() => s.status === 'idle', 3000);
   assert.equal(s2.messages.filter(m => m.role === 'assistant').length, 0);
   assert.equal(s2.status, 'stopped');
+});
+
+test('worktree per-file preview shows tracked and untracked text without changing HEAD', t => {
+  const { projectRoot, dataDir } = setup(t);
+  const workspace = createIsolatedWorktree({ projectRoot, dataDir, jobId: '9ad5302d-cc13-4b0c-912f-d01b0722d101' });
+  fs.writeFileSync(path.join(workspace.path, 'README.md'), 'changed after running agent\n');
+  fs.writeFileSync(path.join(workspace.path, 'NEW.txt'), 'hello\nworld\n');
+  const tracked = worktreeFileDiff(workspace, 'README.md');
+  const untracked = worktreeFileDiff(workspace, 'NEW.txt');
+  assert.equal(tracked.kind, 'text');
+  assert.match(tracked.content, /\+changed after running agent/);
+  assert.match(tracked.content, /-committed/);
+  assert.match(untracked.content, /\+hello/);
+  assert.match(untracked.content, /--- \/dev\/null/);
+  assert.equal(fs.readFileSync(path.join(projectRoot, 'README.md'), 'utf8'), 'committed\n');
+  assert.throws(() => worktreeFileDiff(workspace, '../../etc/passwd'), InputError);
+  assert.throws(() => worktreeFileDiff(workspace, 'README-NOT-CHANGED'), InputError);
+});
+
+test('diff preview refuses symlink contents, binary data and oversized untracked files', t => {
+  const { dataDir, projectRoot } = setup(t);
+  const workspace = createIsolatedWorktree({ projectRoot, dataDir, jobId: '9ad5302d-cc13-4b0c-912f-d01b0722d102' });
+  fs.symlinkSync(path.join(dataDir, 'secret.txt'), path.join(workspace.path, 'redirect'));
+  fs.writeFileSync(path.join(dataDir, 'secret.txt'), 'do-not-open');
+  fs.writeFileSync(path.join(workspace.path, 'binary.dat'), Buffer.from([0, 1, 2]));
+  fs.writeFileSync(path.join(workspace.path, 'big.txt'), 'x'.repeat(37000));
+  const symlink = worktreeFileDiff(workspace, 'redirect');
+  assert.equal(symlink.kind, 'special');
+  assert.doesNotMatch(symlink.content, /do-not-open/);
+  assert.equal(worktreeFileDiff(workspace, 'binary.dat').kind, 'binary');
+  assert.equal(worktreeFileDiff(workspace, 'big.txt').kind, 'too-large');
 });

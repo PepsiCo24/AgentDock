@@ -15,3 +15,25 @@
 .workspace-changes { white-space: pre-wrap; font-size: 11px; max-height: 190px; overflow: auto; }
 
 #diagnose-agents { font-size: 11px; margin-right: 5px; }
+
+/* V0.4 bounded, read-only change previews and explicit retry history */
+.workspace-changes{display:grid;gap:5px;max-height:300px;overflow:auto;background:#111b29;padding:7px;border-radius:7px}
+.workspace-change-file{display:block;text-align:left;max-width:100%;overflow-wrap:anywhere;font-family:ui-monospace,Consolas,monospace;font-size:10px;color:#bed2e8;border:1px solid #304359;background:#1e2c3f;border-radius:5px;padding:6px;width:100%}
+.workspace-change-file:hover{border-color:#6e8dac;color:#fff}
+.workspace-empty{font-size:10px;color:#8b9db4;line-height:1.5}
+.file-diff{font:10px/1.6 ui-monospace,Consolas,monospace;max-height:200px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#c6d5e9;border-top:1px solid #34465b;padding:9px 3px 3px;margin:4px 0}
+.history-section{border-top:1px solid #344051;padding:8px 12px 12px;max-height:220px;min-height:115px;overflow:auto}
+.history-section .preview-heading{padding:4px 3px 10px}
+.history-list{display:grid;gap:7px}
+.history-entry{border:1px solid #324055;background:#172232;border-radius:9px;padding:9px;display:grid;gap:7px}
+.history-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.history-time,.history-detail{font-size:10px;color:#8d9cb1}
+.history-status{font-size:10px;border-radius:5px;padding:3px 5px;color:#b2bdd0;background:#344055}
+.history-status.status-completed{color:#9fe3bd;background:#254839}
+.history-status.status-failed,.history-status.status-interrupted{color:#efada9;background:#56363c}
+.history-status.status-awaiting_approval{color:#f3c88c;background:#57452e}
+.history-prompt{font-size:11px;line-height:1.5;color:#dae2ec;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.history-retry{justify-self:start;color:#d7c6a8}
+.history-empty{font-size:11px;color:#8393a8;padding:9px 2px}
+#history-more{margin-top:9px;width:100%}
+@media(max-width:660px){.history-section{max-height:165px}.file-diff{max-height:130px}}

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.3 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.4 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
@@ -40,12 +40,16 @@ agy --version
 
 参考官方说明：[Codex CLI](https://learn.chatgpt.com/docs/cli/reference)、[Claude Code CLI](https://code.claude.com/docs/en/cli-reference)、[Antigravity CLI](https://antigravity.google/docs/cli/headless/)。
 
-## 3. V0.3 功能与状态
+## 3. V0.4 功能与状态
 
 | 功能 | 说明 |
 | --- | --- |
 | 多 Agent / 项目 / 会话 | Agent、项目和会话独立管理；全局默认最多 3 个同时执行的任务，超出的排队 |
 | Git worktree 隔离写入 | 可写任务可选从 Git HEAD 新建独立 worktree；完成后可查看路径、变更和打开文件管理器，**不自动合并** |
+| 逐文件差异审查 | 在 Git 隔离工作区点击变更文件即可查看**只读且有上限**的文本差异；不显示符号链接目标文件内容、二进制及大型未跟踪文件；不自动应用改动 |
+| 持久化执行历史 | 保存最近 150 条任务元数据（状态、耗时、Token 使用量和关联消息）；历史分页加载，每次最多 50 条 |
+| 显式故障重试 | 失败或重启中断的任务可人工点击重试。编辑任务**重新要求授权**；重试前提醒原任务可能已发生部分文件修改 |
+| 重启恢复边界 | 启动时将旧的运行中、排队中、等待批准任务统一标记为中断，不自动重放任务或复用过期批准 |
 | CLI 诊断 | 只检查 PATH 与 `--version`，不读取密钥、不承诺登录成功 |
 | 独立窗口 | 会话右上角 ↗ 打开独立浏览器窗口；不是原生桌面 App 窗口 |
 | 消息队列 | 同一会话新任务排在上一任务后；**不是**实时打断式插话 |
@@ -57,19 +61,20 @@ agy --version
 | 文件操作 | 在原生文件管理器中定位，或下载小于 30 MB 的副本 |
 | 持久化 | 会话消息和 Agent session ID 写入本机 JSON；重启后授权/排队全部失效，避免意外重跑 |
 
-**实际验证状态**：`npm test` 在本地测试环境验证了 Demo、HTTP 路由、安全校验和三类 CLI 的**模拟 NDJSON 进程**。没有预装真实的 Codex/Claude/Antigravity 可登录 CLI，因此真实厂商端到端任务及官方 App 接续**尚未验收**。
+**实际验证状态**：`npm test` 在本地测试环境验证了 Demo、HTTP 路由、安全校验、持久化/迁移、Git 差异和三类 CLI 的**模拟 NDJSON 进程**。没有完成真实的 Codex/Claude/Antigravity 登录 CLI 端到端验证，因此真实厂商执行与官方 App 接续**尚未验收**。
 
 ## 4. 项目结构
 
 ```text
-src/core.mjs             状态、项目、目录范围保护和文件名搜索
-src/agents.mjs           Agent 适配、并发限流、执行队列、授权、流式事件和运行状态
-src/worktrees.mjs        Git worktree 的创建、附件镜像和变更列表
+src/core.mjs             状态、项目、历史分页/迁移、目录范围保护和文件名搜索
+src/agents.mjs           Agent 适配、并发限流、执行队列、显式重试、授权和运行状态
+src/worktrees.mjs        Git worktree 创建、附件镜像、变更列表及只读单文件 diff
 src/server.mjs           127.0.0.1 本地 HTTP/SSE API、上传/预览/下载
 public/                  浏览器工作台 UI（原生 JS/CSS，无前端框架）
-test/                    单元、HTTP 集成和模拟 CLI 进程测试
+test/                    单元、HTTP 集成、真实 Git 仓库和模拟 CLI 进程测试
 docs/DEVELOPMENT_PLAN.md 路线图与验收边界
 docs/WORKTREE.md        worktree 的安全边界与手动回收
+docs/RUN_HISTORY.md     历史持久化、重试和 HTTP 接口说明
 docs/CLI_COMPATIBILITY.md CLI 真实环境验收矩阵
 scripts/diagnose.mjs    非认证式 CLI 版本诊断
 .github/workflows/ci.yml Node 20 / Node 22 CI
@@ -96,4 +101,4 @@ npm run dev
 - **待真机验收**：在 macOS、Windows、Linux 安装对应 CLI 后对每个适配器分别跑真实任务；核查不同版本 `resume` 参数、权限模式和远端 ID。
 - **后续**：如官方协议支持，再开发逐工具审批和真正的执行中插话；研究与官方 App 共享/导入会话；从官方允许的接口获取额度；可选 Tauri 原生多窗口打包。
 
-开发计划见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)。隔离工作区详细说明见 [docs/WORKTREE.md](docs/WORKTREE.md)，厂商 CLI 的真实验收清单见 [docs/CLI_COMPATIBILITY.md](docs/CLI_COMPATIBILITY.md)。
+开发计划见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)。隔离工作区详细说明见 [docs/WORKTREE.md](docs/WORKTREE.md)，执行历史与安全重试见 [docs/RUN_HISTORY.md](docs/RUN_HISTORY.md)，厂商 CLI 的真实验收清单见 [docs/CLI_COMPATIBILITY.md](docs/CLI_COMPATIBILITY.md)。

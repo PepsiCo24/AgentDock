@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Store, InputError, resolveProjectFile, within } from './core.mjs';
 import { installedAgents, agentDiagnostics, Runner } from './agents.mjs';
-import { worktreeChanges } from './worktrees.mjs';
+import { worktreeChanges, worktreeFileDiff } from './worktrees.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const staticDir = path.resolve(here, '../public');
@@ -132,10 +132,10 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
         throw new InputError('缺少本地会话安全令牌', 403);
       }
       if (req.method === 'GET' && pathname === '/api/bootstrap') {
-        return json(res, 200, { token, agents: installedAgents(), projects: store.projects(), sessions: store.sessions(), version: '0.3.0' });
+        return json(res, 200, { token, agents: installedAgents(), projects: store.projects(), sessions: store.sessions(), version: '0.4.0' });
       }
       if (req.method === 'GET' && pathname === '/api/agents/diagnostics') return json(res, 200, agentDiagnostics());
-      if (req.method === 'GET' && pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.3.0' });
+      if (req.method === 'GET' && pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.4.0' });
       if (req.method === 'GET' && pathname === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.write('event: ready\ndata: {}\n\n');
@@ -152,6 +152,19 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
         return json(res, 201, store.addSession(await readJson(req)));
       }
       if (req.method === 'GET' && pathname === '/api/sessions') return json(res, 200, store.sessions());
+      const runRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/runs(?:\/([0-9a-f-]+)\/retry)?$/i);
+      if (runRoute) {
+        if (req.method === 'GET' && !runRoute[2]) {
+          return json(res, 200, store.runs(runRoute[1], {
+            limit: Number(url.searchParams.get('limit') ?? 20),
+            offset: Number(url.searchParams.get('offset') ?? 0)
+          }));
+        }
+        if (req.method === 'POST' && runRoute[2]) {
+          await readJson(req);
+          return json(res, 202, runner.retry(runRoute[1], runRoute[2]));
+        }
+      }
       const sessionRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(messages|stop|approve|reject))?$/i);
       if (sessionRoute) {
         const id = sessionRoute[1];
@@ -179,16 +192,21 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
           return json(res, 200, runner.reject(id, data.jobId));
         }
       }
-      const workspaceRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/workspaces\/([0-9a-f-]+)\/(changes|reveal)$/i);
+      const workspaceRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/workspaces\/([0-9a-f-]+)\/(changes|diff|reveal)$/i);
       if (workspaceRoute) {
         const session = store.session(workspaceRoute[1]);
         const workspace = (session.workspaces || []).find(w => w.id === workspaceRoute[2]);
         if (!workspace) throw new InputError('未找到该会话的隔离工作区', 404);
-        const workspacePool = fs.realpathSync(path.join(store.dir, 'worktrees'));
+        const poolPath = path.join(store.dir, 'worktrees');
+        if (!fs.existsSync(poolPath) || !fs.existsSync(workspace.path)) throw new InputError('工作区目录不存在', 404);
+        const workspacePool = fs.realpathSync(poolPath);
         if (!within(workspacePool, fs.realpathSync(workspace.path)) || fs.realpathSync(workspace.path) !== workspace.path) {
           throw new InputError('工作区路径不安全', 403);
         }
         if (req.method === 'GET' && workspaceRoute[3] === 'changes') return json(res, 200, worktreeChanges(workspace));
+        if (req.method === 'GET' && workspaceRoute[3] === 'diff') {
+          return json(res, 200, worktreeFileDiff(workspace, url.searchParams.get('path')));
+        }
         if (req.method === 'POST' && workspaceRoute[3] === 'reveal') {
           await readJson(req);
           revealFile({ path: workspace.path }, '.');
@@ -255,7 +273,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be 1..65535');
   const { server } = createApp();
   server.listen(port, '127.0.0.1', () => {
-    console.log(`AgentDock V0.3 is ready: http://127.0.0.1:${port}`);
+    console.log(`AgentDock V0.4 is ready: http://127.0.0.1:${port}`);
     console.log('Local-only mode. Remote access is disabled by default.');
   });
 }

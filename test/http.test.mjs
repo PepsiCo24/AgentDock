@@ -4,15 +4,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/server.mjs';
 
-async function setup(t) {
+const fake = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
+async function setup(t, appOptions = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdock-http-'));
   const root = path.join(dir, 'project');
   fs.mkdirSync(root);
   fs.writeFileSync(path.join(root, 'README.md'), '# Hello from tests\n');
-  const { server, store, runner } = createApp({ dataDir: path.join(dir, 'data'), demoDelay: 100 });
+  const { server, store, runner } = createApp({ dataDir: path.join(dir, 'data'), demoDelay: 100, ...appOptions });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const project = store.addProject({ name: 'HTTP tests', path: root });
@@ -27,7 +29,7 @@ async function setup(t) {
     const r = await fetch(`${base}${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AgentDock-Token': token }, body: JSON.stringify(data) });
     return { status: r.status, json: await r.json() };
   };
-  return { root, base, project, bootstrap, post };
+  return { root, base, project, bootstrap, post, store, runner };
 }
 
 test('Serves frontend and rejects unauthorized writes / invalid Host', async t => {
@@ -202,5 +204,77 @@ test('approved worktree task exposes scoped changes API and source checkout rema
   const unauthorizedSession = await fetch(`${base}/api/sessions/${b.json.id}/workspaces/${workspaceId}/changes`);
   assert.equal(unauthorizedSession.status, 404);
   assert.equal((await post(`/api/sessions/${a.json.id}/workspaces/${workspaceId}/reveal`, {}, 'wrong')).status, 403);
+  assert.equal(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), '# Hello from tests\n');
+});
+
+const sleep = time => new Promise(resolve => setTimeout(resolve, time));
+async function waitFor(check, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for HTTP state');
+    await sleep(18);
+  }
+}
+
+test('Run history API paginates, redacts queued prompts and requires explicit approval', async t => {
+  const { base, project, post, store } = await setup(t);
+  const { json: session } = await post('/api/sessions', { projectId: project.id, agentId: 'demo' });
+  const a = await post(`/api/sessions/${session.id}/messages`, { text: 'Change sample', mode: 'edit' });
+  assert.equal(a.status, 202);
+  const r1 = await (await fetch(`${base}/api/sessions/${session.id}/runs?limit=1`)).json();
+  assert.equal(r1.total, 1);
+  assert.equal(r1.items[0].status, 'awaiting_approval');
+  assert.equal(r1.items[0].retryable, false);
+  assert.equal('queue' in (await (await fetch(`${base}/api/sessions/${session.id}`)).json()), false);
+  assert.equal((await post(`/api/sessions/${session.id}/runs/${a.json.jobId}/retry`, {})).status, 409);
+  const reject = await post(`/api/sessions/${session.id}/reject`, { jobId: a.json.jobId });
+  assert.equal(reject.status, 200);
+  assert.equal(store.runs(session.id).items[0].status, 'rejected');
+  assert.equal((await (await fetch(`${base}/api/sessions/${session.id}/runs?limit=99`)).status), 400);
+  const b = await post(`/api/sessions/${session.id}/messages`, { text: 'Read sample' });
+  await waitFor(() => store.runs(session.id).items.find(r => r.id === b.json.jobId)?.status === 'completed');
+  const pg2 = await (await fetch(`${base}/api/sessions/${session.id}/runs?limit=1&offset=1`)).json();
+  assert.equal(pg2.items[0].id, a.json.jobId);
+});
+
+test('Retry API re-approves a failing CLI edit and refuses stale token', async t => {
+  const spawnImpl = (command, args, options) => spawn(process.execPath, [fake, command, ...args], options);
+  const { base, project, post, store } = await setup(t, { spawnImpl });
+  const { json: session } = await post('/api/sessions', { projectId: project.id, agentId: 'claude' });
+  const a = await post(`/api/sessions/${session.id}/messages`, { text: 'Please fail', mode: 'edit' });
+  assert.equal((await post(`/api/sessions/${session.id}/approve`, { jobId: a.json.jobId })).status, 200);
+  await waitFor(() => store.runs(session.id).items[0].status === 'failed');
+  assert.equal((await post(`/api/sessions/${session.id}/runs/${a.json.jobId}/retry`, {}, 'bad')).status, 403);
+  assert.equal(store.runs(session.id).total, 1);
+  const b = await post(`/api/sessions/${session.id}/runs/${a.json.jobId}/retry`, {});
+  assert.equal(b.status, 202);
+  assert.notEqual(b.json.jobId, a.json.jobId);
+  assert.equal(store.runs(session.id).items[0].status, 'awaiting_approval');
+  assert.equal(store.runs(session.id).items[0].approvedAt, null);
+  assert.equal((await post(`/api/sessions/${session.id}/reject`, { jobId: b.json.jobId })).status, 200);
+  assert.equal(store.runs(session.id).items[0].status, 'rejected');
+});
+
+test('Per-file diff API is read-only, bounds file types and rejects unrelated paths', async t => {
+  const { root, base, project, post, store } = await setup(t);
+  execFileSync('git', ['init', '-q', root]);
+  execFileSync('git', ['-C', root, 'add', 'README.md']);
+  execFileSync('git', ['-C', root, '-c', 'user.name=Tester', '-c', 'user.email=test@example.com', 'commit', '-qm', 'initial']);
+  const { json: session } = await post('/api/sessions', { projectId: project.id, agentId: 'demo' });
+  const { json: job } = await post(`/api/sessions/${session.id}/messages`, { text: 'Edit in worktree', mode: 'edit', workspaceMode: 'worktree' });
+  assert.equal((await post(`/api/sessions/${session.id}/approve`, { jobId: job.jobId })).status, 200);
+  await waitFor(() => store.session(session.id).lastRun?.outcome === 'completed');
+  const workspace = store.session(session.id).workspaces[0];
+  fs.writeFileSync(path.join(workspace.path, 'README.md'), 'updated worktree only\n');
+  fs.writeFileSync(path.join(workspace.path, 'new.txt'), 'created by agent\n');
+  const route = `${base}/api/sessions/${session.id}/workspaces/${workspace.id}`;
+  const changes = await (await fetch(`${route}/changes`)).json();
+  assert.ok(changes.changed.some(x => x.path === 'new.txt'));
+  const diff = await (await fetch(`${route}/diff?path=README.md`)).json();
+  assert.equal(diff.kind, 'text');
+  assert.match(diff.content, /updated worktree only/);
+  const untracked = await (await fetch(`${route}/diff?path=new.txt`)).json();
+  assert.match(untracked.content, /created by agent/);
+  assert.equal((await fetch(`${route}/diff?path=..%2F..%2Fsecret`)).status, 404);
   assert.equal(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), '# Hello from tests\n');
 });

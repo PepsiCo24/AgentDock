@@ -19,7 +19,7 @@
     <aside class="sidebar">
       <header class="sidebar-header">
         <div><div class="eyebrow">YOUR WORKSPACE</div><h1>Agent<span>Dock</span></h1></div>
-        <div class="version">v0.2</div>
+        <div class="version">v0.4</div>
       </header>
       <div class="project-section">
         <div class="section-title"><span>当前项目</span><button class="mini-button" id="add-project" title="添加本地项目" aria-label="添加本地项目">＋</button></div>
@@ -50,7 +50,9 @@
       <div class="file-search"><input id="file-search" type="search" placeholder="搜索文件名..." aria-label="搜索项目文件名"/><button id="clear-search" class="mini-button" title="清除搜索">×</button></div><div class="file-breadcrumb"><button id="files-back" class="icon-button" title="返回上级目录">←</button><span id="current-dir">/</span></div>
       <div id="file-list" class="file-list"></div>
       <section class="preview-section" id="preview-section"><div class="preview-heading"><span>PREVIEW</span><button class="icon-button" id="close-preview" title="关闭预览">×</button></div><div class="preview-title" id="preview-title">选择文件预览</div><div class="preview-content" id="preview-content"><div class="preview-empty">选择文件即可在侧边预览</div></div><div class="preview-actions"><button id="attach-preview" class="small-outline">＋ 附加到对话</button><button id="reveal-preview" class="small-outline">在文件管理器中显示 ↗</button><button id="download-preview" class="small-outline">下载副本 ↓</button></div></section>
-      <section class="activity-section"><div class="preview-heading">运行活动 · 最近一次任务</div><div id="run-metrics" class="run-metrics">暂无执行记录</div><div id="activity-list" class="activity-list"></div></section><div class="explorer-foot">可拖动文件到消息框，或点击文件预览</div>
+      <section class="activity-section"><div class="preview-heading">运行活动 · 最近一次任务</div><div id="run-metrics" class="run-metrics">暂无执行记录</div><div id="activity-list" class="activity-list"></div></section>
+      <section class="history-section" aria-label="执行历史"><div class="preview-heading"><span>执行历史</span><span id="history-count"></span></div><div id="run-history" class="history-list"></div><button id="history-more" class="small-outline" hidden>加载更多历史</button></section>
+      <div class="explorer-foot">失败或重启中断的任务必须主动重试；可写任务会重新请求授权。</div>
     </aside>
   </div>
   <dialog id="project-dialog"><form method="dialog" id="project-form"><div class="dialog-eyebrow">NEW WORKSPACE</div><h2>添加本地项目</h2><p>选择一个你信任的本地目录。Agent 可能会在该目录内修改代码。</p><label>项目名称<input name="name" autocomplete="off" placeholder="例如：我的应用" required maxlength="120"/></label><label>绝对路径<input name="path" autocomplete="off" placeholder="/Users/you/projects/my-app" required/></label><div class="dialog-actions"><button type="button" id="cancel-project" class="small-outline">取消</button><button type="submit" class="send-button">添加项目</button></div></form></dialog>
