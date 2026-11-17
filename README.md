@@ -1,5 +1,7 @@
 # AgentDock · 本地多 AI Agent 工作台
 
+> **仓库状态（2026-11-17）**：当前 GitHub `main` 分支仅含项目说明文档，V0.2 完整源码与测试尚未提交到仓库。请不要直接按下方命令在 GitHub 克隆内容中执行 `npm start`。V0.2 完整源码已在当前 ChatGPT 对话提供 ZIP 交付，解压后可执行下述命令。仓库代码同步仍待完成。
+
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
 **V0.2 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
