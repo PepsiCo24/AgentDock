@@ -122,7 +122,7 @@ test('reset HTTP requires token, current ID and idle session', async t => {
   t.after(async()=>{await new Promise(r=>app.server.close(r));fs.rmSync(dir,{recursive:true,force:true})});
   const boot=await (await fetch(base+'/api/bootstrap')).json();
   assert.match(boot.bootId,/^[a-f0-9-]{36}$/);
-  assert.equal(boot.version,'0.6.0');
+  assert.equal(boot.version,'0.7.0');
   const project=app.store.addProject({name:'Demo',path:dir});
   const session=app.store.addSession({projectId:project.id,agentId:'codex'});
   session.remoteId='valid-id';app.store.save();
