@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.7 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.9 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
@@ -121,3 +121,7 @@ npm run dev
 - **后续**：如官方协议支持，再开发逐工具审批和真正的执行中插话；研究与官方 App 共享/导入会话；从官方允许的接口获取额度；可选 Tauri 原生多窗口打包。
 
 开发计划见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)。隔离工作区详细说明见 [docs/WORKTREE.md](docs/WORKTREE.md)，执行历史与安全重试见 [docs/RUN_HISTORY.md](docs/RUN_HISTORY.md)，厂商 CLI 的真实验收清单见 [docs/CLI_COMPATIBILITY.md](docs/CLI_COMPATIBILITY.md)，多窗口同步见 [docs/MULTI_WINDOW.md](docs/MULTI_WINDOW.md)。
+
+
+## V0.9 UI and provider marks
+The agent rail uses **local self-hosted** Codex, Claude Code and Google Antigravity identifying marks, with a distinct AgentDock Demo symbol. Provider marks do not imply vendor partnership or endorsement. See [docs/BRAND_ASSETS.md](docs/BRAND_ASSETS.md) for attribution and publication cautions. The no-session view provides a create-session or CLI-diagnostics action. Vendor login and desktop synchronization remain unverified.

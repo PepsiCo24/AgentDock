@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0 (2026-11-18)
+
+- Replace placeholder Agent initials with locally served Codex, Claude Code and Antigravity identification marks; document provenance and trademark limits.
+- Improve agent rail, provider subtitles, unavailable/selected states and composer focus contrast; respect reduced motion.
+- Add contextual empty-session create/diagnose action and strict same-origin SVG serving.
+- Add UI and HTTP brand route regression tests; existing CLI permissions and local data persistence remain unchanged.
+- Local UI build tests 90/90 passing. Real desktop-browser validation and vendor CLI login compatibility are pending.
+
 ## 0.7.0 (2026-11-18)
 
 - Fixed session/project/agent navigation races and prevented sending a task to the previous session while switching.

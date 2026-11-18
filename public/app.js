@@ -66,6 +66,31 @@ function node(tag, className, content) {
   return el;
 }
 function clear(el) { el.replaceChildren(); }
+const BRAND_ASSETS = Object.freeze({
+  codex: '/brands/codex.svg',
+  claude: '/brands/claude-code.svg',
+  antigravity: '/brands/antigravity.svg'
+});
+function agentVendor(agentId) {
+  return agentId === 'codex' ? 'OpenAI' : agentId === 'claude' ? 'Anthropic' : agentId === 'antigravity' ? 'Google' : 'Local';
+}
+function applyBrandMark(target, agentId, fallback = 'DE') {
+  clear(target);
+  target.dataset.agent = agentId || 'demo';
+  const asset = BRAND_ASSETS[agentId];
+  if (!asset) {
+    target.append(node('span', 'demo-brand-symbol', 'A'));
+    return;
+  }
+  const mark = node('img', 'brand-logo');
+  mark.src = asset;
+  mark.alt = '';
+  mark.decoding = 'async';
+  mark.addEventListener('error', () => {
+    if (mark.isConnected) mark.replaceWith(node('span', 'brand-logo-fallback', fallback));
+  }, { once: true });
+  target.append(mark);
+}
 function toast(message) {
   ui.toast.textContent = message;
   ui.toast.classList.add('show');
@@ -88,10 +113,13 @@ function renderAgents() {
     const btn = node('button', `agent-button${a.id === state.agentId ? ' selected' : ''}${a.installed ? '' : ' disabled'}`);
     btn.title = a.installed ? a.description : `${a.description}（未检测到 CLI）`;
     btn.setAttribute('aria-label', `${a.name}${a.installed ? '' : '，未安装'}`);
-    const avatar = node('span', 'agent-avatar', a.short);
-    avatar.style.background = `${a.color}22`;
-    avatar.style.color = a.color;
-    btn.append(avatar, node('span', 'agent-label', a.name === 'Antigravity' ? 'Anti' : a.name === 'Claude Code' ? 'Claude' : a.name));
+    const avatar = node('span', 'agent-avatar brand-avatar');
+    applyBrandMark(avatar, a.id, a.short);
+    btn.style.setProperty('--agent-accent', a.color);
+    const textWrap = node('span', 'agent-copy');
+    textWrap.append(node('span', 'agent-label', a.name === 'Antigravity' ? 'Anti' : a.name === 'Claude Code' ? 'Claude' : a.name));
+    textWrap.append(node('span', 'agent-vendor', agentVendor(a.id)));
+    btn.append(avatar, textWrap);
     btn.onclick = () => void switchAgent(a.id);
     ui.agents.append(btn);
   }
@@ -129,12 +157,12 @@ function renderSessions() {
 }
 function renderHeader() {
   const a = agent();
-  ui.avatar.textContent = a?.short || '—';
-  ui.avatar.style.background = a ? `${a.color}22` : '#394353';
-  ui.avatar.style.borderColor = a ? `${a.color}66` : '#596575';
+  applyBrandMark(ui.avatar, a?.id || 'demo', a?.short || 'DE');
+  ui.avatar.style.background = a ? a.color + '1a' : '#394353';
+  ui.avatar.style.borderColor = a ? a.color + '55' : '#596575';
   ui.avatar.style.color = a?.color || '#fff';
   ui.title.textContent = a?.name || 'AgentDock';
-  ui.subtitle.textContent = a?.installed ? statusText(state.session) : '未检测到对应的本地 CLI · 可查看已有会话';
+  ui.subtitle.textContent = a?.installed ? agentVendor(a?.id) + ' · ' + statusText(state.session) : agentVendor(a?.id) + ' · 未检测到对应的本地 CLI · 可查看已有会话';
   ui.resetRemote.hidden = !state.session?.remoteId || state.session?.agentId === 'demo';
   ui.resetRemote.disabled = Boolean(state.session && (
     ['running', 'awaiting_approval', 'queued'].includes(state.session.status) || state.session.queueLength > 0
@@ -185,11 +213,22 @@ function renderConversation() {
   const body = node('div', 'conversation-inner');
   if (!state.session || (!state.session.messages.length && !state.session.draft)) {
     const welcome = node('div', 'welcome');
-    welcome.append(node('div', 'welcome-icon', '✦'), node('h2', '', '让每个 Agent 各司其职'),
-      node('p', '', '在一个工作台中切换 AI 编程助手、管理多个项目和独立会话。拖入文件，查看运行状态，把任务排队执行。'));
-    const pills = node('div', 'feature-pills');
-    for (const label of ['⌁ 多 Agent 切换', '◷ 并行会话', '▤ 文件拖拽与预览', '↳ 队列与任务停止']) pills.append(node('span', '', label));
-    welcome.append(pills);
+    const currentAgent = agent();
+    const noSession = !state.session;
+    welcome.append(node('div', 'welcome-icon', noSession ? '＋' : '✦'),
+      node('h2', '', noSession ? '准备开始新的会话' : '让每个 Agent 各司其职'),
+      node('p', '', noSession
+        ? currentAgent?.installed ? '使用 ' + currentAgent.name + ' 开始工作，项目文件和历史记录保留在本地。' : (currentAgent?.name || '所选 Agent') + ' 尚未安装，安装后点击「检查 Agent CLI」刷新状态。'
+        : '在一个工作台中切换 AI 编程助手、管理多个项目和独立会话。拖入文件，查看运行状态，把任务排队执行。'));
+    if (noSession) {
+      const start = node('button', 'welcome-action', currentAgent?.installed ? '＋ 新建会话' : '检查 Agent CLI');
+      start.onclick = () => q(currentAgent?.installed ? '#new-session' : '#diagnose-agents').click();
+      welcome.append(start);
+    } else {
+      const pills = node('div', 'feature-pills');
+      for (const label of ['⌁ 多 Agent 切换', '◷ 并行会话', '▤ 文件拖拽与预览', '↳ 队列与任务停止']) pills.append(node('span', '', label));
+      welcome.append(pills);
+    }
     body.append(welcome);
   } else {
     for (const message of state.session.messages) body.append(createMessage(message));

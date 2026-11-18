@@ -281,12 +281,12 @@ test('Per-file diff API is read-only, bounds file types and rejects unrelated pa
 
 test('V0.6 bootstrap includes a process identity that changes after restart', async t => {
   const a = await setup(t);
-  assert.equal(a.bootstrap.version, '0.7.0');
+  assert.equal(a.bootstrap.version, '0.9.0');
   assert.match(a.bootstrap.bootId, /^[0-9a-f-]{36}$/);
   const b = await setup(t);
   assert.notEqual(a.bootstrap.bootId, b.bootstrap.bootId);
   const health = await (await fetch(`${a.base}/api/health`)).json();
-  assert.equal(health.version, '0.7.0');
+  assert.equal(health.version, '0.9.0');
 });
 
 test('SSE announces boot ID and broadcasts session/project catalog mutations across windows', async t => {
@@ -400,4 +400,18 @@ test('disconnected SSE clients release their server-side change listener', async
     await new Promise(resolve => setTimeout(resolve, 15));
   }
   assert.equal(runner.listenerCount('change'), start);
+});
+
+test('V0.9 local provider logos are SVG-only and prevent arbitrary file access', async t => {
+  const { base } = await setup(t);
+  for (const name of ['codex.svg', 'claude-code.svg', 'antigravity.svg']) {
+    const response = await fetch(base + '/brands/' + name);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') || '', /^image\/svg\+xml/);
+    assert.match(response.headers.get('content-security-policy') || '', /img-src 'self'/);
+    const body = await response.text();
+    assert.match(body, /<svg[^>]+viewBox=/);
+    assert.doesNotMatch(body, /<(script|foreignObject|iframe)\b|\bonload\s*=/i);
+  }
+  assert.equal((await fetch(base + '/brands/unknown.svg')).status, 404);
 });

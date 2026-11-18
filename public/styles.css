@@ -55,3 +55,41 @@
   .app.mobile-sidebar-open .mobile-backdrop{display:block;position:fixed;inset:0;background:#0008;border:0;z-index:23}
   .app.mobile-sidebar-open .inspector{display:none}
 }
+
+/* V0.9 · provider identification, clear navigation, contextual empty state */
+.app{grid-template-columns:82px 260px minmax(390px,1fr) 285px}
+.app.inspector-hidden{grid-template-columns:82px 260px minmax(390px,1fr)}
+.agents{padding:20px 4px 16px;gap:16px;background:linear-gradient(180deg,#0d1320,#0b1018);border-right:1px solid #283344}
+.agent-tabs{display:flex;align-items:center;flex-direction:column;gap:14px}
+.agent-button{width:68px;gap:7px;padding:8px 2px;border-radius:14px;transition:background .16s ease}
+.agent-button:hover,.agent-button.selected{background:#172233}
+.agent-button::before{left:-6px}
+.agent-copy{display:grid;justify-items:center;gap:3px;line-height:1.1}
+.agent-button .agent-label{font-size:10px;font-weight:700;color:#dce6f1}
+.agent-vendor{font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:#899ab0}
+.agent-avatar.brand-avatar{width:44px;height:44px;display:grid;place-items:center;background:#1c2737;border-color:#364456;overflow:hidden}
+.agent-button.selected .agent-avatar{border-color:var(--agent-accent,#e8b97c);box-shadow:0 0 0 3px color-mix(in srgb,var(--agent-accent,#e8b97c) 17%,transparent)}
+.agent-button.selected::before{background:var(--agent-accent,#e8b97c)}
+.agent-button.disabled .agent-avatar{opacity:.65;filter:grayscale(.45)}
+.agent-button.disabled .agent-label{color:#9caabd}
+.brand-logo{display:block;width:29px;height:29px;object-fit:contain;pointer-events:none}
+.agent-avatar[data-agent="claude"] .brand-logo,.header-avatar[data-agent="claude"] .brand-logo{width:33px;height:25px}
+.demo-brand-symbol{font-size:22px;font-weight:800;color:#eac08b;letter-spacing:-.12em;transform:translateX(-1px)}
+.brand-logo-fallback{font-size:11px;font-weight:800;letter-spacing:.05em;color:#e6eaf0}
+.header-avatar{display:grid;place-items:center;overflow:hidden}
+.header-avatar .brand-logo{width:29px;height:29px}
+.header-title{font-size:17px}
+.header-subtitle{color:#94a9bf}
+.main-header{background:linear-gradient(180deg,#121a26,#101722);border-bottom:1px solid #293444}
+.session-item:hover{background:#1e2b3b}
+.session-item.active{background:#1d2b3f;border-color:#806e58}
+.composer-shell{background:linear-gradient(180deg,#161e2c,#111925);border-color:#354254;box-shadow:0 12px 34px #0004}
+.composer-shell:focus-within{border-color:#b39162;box-shadow:0 12px 34px #0006,0 0 0 1px #b3916266}
+.welcome{padding:20px;border:1px solid #293a4c;border-radius:16px;background:#111a27}
+.welcome-action{margin-top:22px;border:1px solid #bfa078;border-radius:10px;padding:11px 18px;background:linear-gradient(180deg,#e6c395,#cba474);color:#25201b;font-size:13px;font-weight:700;box-shadow:0 12px 25px #0005}
+.welcome-action:hover{filter:brightness(1.05)}
+.welcome-action:focus-visible,.agent-button:focus-visible{outline:2px solid #f1c184;outline-offset:3px}
+@media(max-width:1240px){.app{grid-template-columns:76px 235px minmax(360px,1fr) 265px}.app.inspector-hidden{grid-template-columns:76px 235px minmax(360px,1fr)}}
+@media(max-width:1060px){.app,.app.inspector-hidden{grid-template-columns:72px 220px minmax(350px,1fr)}}
+@media(max-width:660px){.app,.app.inspector-hidden{grid-template-columns:58px minmax(0,1fr)}.agents{padding:12px 2px}.agent-button{width:49px;padding:5px 0}.agent-avatar.brand-avatar{width:38px;height:38px}.agent-vendor{font-size:7px}.app.mobile-sidebar-open .sidebar{left:58px;width:min(310px,calc(100vw - 58px))}}
+@media(prefers-reduced-motion:reduce){.agent-button,.welcome-action{transition:none;transform:none!important}}
