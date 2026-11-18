@@ -1,4 +1,4 @@
-# AgentDock V0.4 测试与验收说明
+# AgentDock V0.5 测试与验收说明
 
 最后本地测试：2026-11-17 · Linux · Node.js v22.16.0。
 
@@ -14,7 +14,7 @@ npm run diagnose
 
 ## 本地 HTTP 验收
 
-- `GET /api/health` 应返回 `{"status":"ok","version":"0.4.0"}`。
+- `GET /api/health` 应返回 `{"status":"ok","version":"0.5.0"}`。
 - `GET /api/sessions/:id/runs` 可分页，不把完整待执行队列作为 HTTP 响应公开。
 - 未带正确 `X-AgentDock-Token` 的 POST 重试返回 403；不可重试任务返回 409。
 - 重试可写任务需要再次批准；重启前的队列/批准全部失效。
@@ -31,3 +31,10 @@ npm run diagnose
 ## 安全边界
 
 `plan` 不代表 OS 沙箱。`edit` 仅是执行前的一次任务授权。重试可能重复触发已部分完成的操作；故障自动重试被明确禁止。工作区审查只读，**不会自动合并**。
+
+## V0.5 最终验收结果（2026-11-18）
+
+- `npm run check` 通过。
+- `npm test`：64/64 通过，涵盖 CLI 续接参数、UTF-8 NDJSON、缺失任务终结事件、SSE 广播及进程标识。
+- GitHub Actions 本版 CI 成功。
+- 只完成本地模拟与接口测试，真实厂商 CLI 的登录及执行仍待验收。
