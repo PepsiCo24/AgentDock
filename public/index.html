@@ -17,10 +17,10 @@
       <div class="agent-bottom"><span class="live-indicator"></span><span>LOCAL</span></div>
     </aside>
     <button id="mobile-backdrop" class="mobile-backdrop" aria-label="Close project navigation"></button>
-    <aside class="sidebar">
+    <aside id="project-sidebar" class="sidebar">
       <header class="sidebar-header">
         <div><div class="eyebrow">YOUR WORKSPACE</div><h1>Agent<span>Dock</span></h1></div>
-        <div class="version">v0.9</div>
+        <div class="version">v0.10</div>
       </header>
       <div class="project-section">
         <div class="section-title"><span>当前项目</span><button class="mini-button" id="add-project" title="添加本地项目" aria-label="添加本地项目">＋</button></div>
@@ -34,7 +34,7 @@
     <main class="main">
       <header class="main-header">
         <div class="header-agent"><span class="header-avatar" id="header-avatar">DE</span><div><div class="header-title" id="header-title">Demo Agent</div><div class="header-subtitle" id="header-subtitle">准备就绪</div></div></div>
-        <div class="header-actions"><button id="toggle-sidebar" class="icon-button mobile-menu-button" aria-label="Show projects and sessions" title="Projects and sessions">&#9776;</button><span class="mode-pill">● 本地优先</span><span class="connection-state" id="connection-state" role="status" aria-live="polite">○ 连接中</span><button id="reset-cli-context" class="icon-button" hidden title="Reset CLI continuation (keeps local history)">↺</button><button id="open-window" class="icon-button" title="在独立浏览器窗口打开当前会话">↗</button><button id="toggle-inspector" class="icon-button" title="显示或隐藏文件面板">▣</button></div>
+        <div class="header-actions"><button id="toggle-sidebar" class="icon-button mobile-menu-button" aria-controls="project-sidebar" aria-expanded="false" aria-label="Show projects and sessions" title="Projects and sessions">&#9776;</button><span class="mode-pill">● 本地优先</span><span class="connection-state" id="connection-state" role="status" aria-live="polite">○ 连接中</span><button id="reset-cli-context" class="icon-button" hidden title="Reset CLI continuation (keeps local history)">↺</button><button id="open-window" class="icon-button" title="在独立浏览器窗口打开当前会话">↗</button><button id="toggle-inspector" class="icon-button" aria-controls="inspector" aria-expanded="true" title="显示或隐藏文件面板">▣</button></div>
       </header>
       <section class="conversation" id="conversation" aria-label="聊天消息"></section>
       <section id="approval-panel" class="approval-panel" hidden aria-live="polite"><div class="approval-copy"><strong>本次任务申请修改项目文件</strong><p id="approval-summary"></p><span>这是任务级执行授权，并非逐条工具调用审批。请仅对可信项目批准。</span></div><div class="approval-actions"><button id="reject-task" class="stop-button">拒绝</button><button id="approve-task" class="send-button">批准本次任务</button></div></section>

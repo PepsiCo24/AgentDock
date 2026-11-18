@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startupSelection, uploadSlots, isCurrentFileView } from '../public/ui-state.mjs';
+import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag } from '../public/ui-state.mjs';
 
 const projects = [{ id: 'p1' }, { id: 'p2' }];
 const agents = [{ id: 'demo' }, { id: 'codex' }, { id: 'claude' }];
@@ -47,4 +47,20 @@ test('stale project, directory or search responses are not considered current', 
   assert.equal(isCurrentFileView(request, { ...request, projectId: 'p2' }), false);
   assert.equal(isCurrentFileView(request, { ...request, directory: 'test' }), false);
   assert.equal(isCurrentFileView(request, { ...request, query: 'README' }), false);
+});
+
+test('conversation fingerprint is stable for streaming drafts and detects message changes', () => {
+  const run = { id: 's1', status: 'running', messages: [{ id: 'm1', text: 'hello' }], draft: 'foo' };
+  assert.equal(conversationRenderKey(run), conversationRenderKey({ ...run, draft: 'foo bar' }));
+  assert.notEqual(conversationRenderKey(run), conversationRenderKey({ ...run, status: 'idle' }));
+  assert.notEqual(conversationRenderKey(run), conversationRenderKey({ ...run, messages: [...run.messages, { id: 'm2' }] }));
+  assert.notEqual(conversationRenderKey(run), conversationRenderKey({ ...run, id: 's2' }));
+  assert.equal(conversationRenderKey(null), null);
+});
+
+test('dragging a file across projects cannot reuse its relative file name', () => {
+  assert.equal(acceptsInternalDrag('p1', 'p1'), true);
+  assert.equal(acceptsInternalDrag('p1', 'p2'), false);
+  assert.equal(acceptsInternalDrag('', 'p1'), false);
+  assert.equal(acceptsInternalDrag(undefined, 'p1'), false);
 });

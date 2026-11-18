@@ -18,6 +18,18 @@ export function startupSelection({ projects = [], sessions = [], agents = [], re
   };
 }
 
+/** Stable across streaming drafts: preserve message DOM until IDs or run state change. */
+export function conversationRenderKey(session) {
+  if (!session || typeof session.id !== 'string') return null;
+  const ids = Array.isArray(session.messages) ? session.messages.map(message => message.id || '').join('|') : '';
+  return `${session.id}:${session.status === 'running' ? 'running' : 'idle'}:${ids}`;
+}
+
+/** A relative file path dragged from another project must never be attached here. */
+export function acceptsInternalDrag(sourceProjectId, activeProjectId) {
+  return typeof sourceProjectId === 'string' && sourceProjectId.length > 0 && sourceProjectId === activeProjectId;
+}
+
 export function uploadSlots(attachedCount, requestedCount, limit = 12) {
   if (!Number.isInteger(attachedCount) || !Number.isInteger(requestedCount) || attachedCount < 0 || requestedCount < 0) return 0;
   return Math.min(requestedCount, Math.max(0, limit - attachedCount));

@@ -281,12 +281,12 @@ test('Per-file diff API is read-only, bounds file types and rejects unrelated pa
 
 test('V0.6 bootstrap includes a process identity that changes after restart', async t => {
   const a = await setup(t);
-  assert.equal(a.bootstrap.version, '0.9.0');
+  assert.equal(a.bootstrap.version, '0.10.0');
   assert.match(a.bootstrap.bootId, /^[0-9a-f-]{36}$/);
   const b = await setup(t);
   assert.notEqual(a.bootstrap.bootId, b.bootstrap.bootId);
   const health = await (await fetch(`${a.base}/api/health`)).json();
-  assert.equal(health.version, '0.9.0');
+  assert.equal(health.version, '0.10.0');
 });
 
 test('SSE announces boot ID and broadcasts session/project catalog mutations across windows', async t => {

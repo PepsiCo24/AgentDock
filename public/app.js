@@ -1,4 +1,4 @@
-import { startupSelection, uploadSlots, isCurrentFileView } from './ui-state.mjs';
+import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag } from './ui-state.mjs';
 const q = selector => document.querySelector(selector);
 const ui = {
   app: q('#app'), agents: q('#agent-tabs'), projectSelect: q('#project-select'), projectPath: q('#project-path'),
@@ -22,6 +22,9 @@ let needsCatalogRefresh = false;
 let toastTimer = null;
 let sending = false;
 let uploading = false;
+let creatingSession = false;
+let addingProject = false;
+let renderedConversationKey = null;
 let viewEpoch = 0;
 let fileEpoch = 0;
 let previewEpoch = 0;
@@ -41,9 +44,20 @@ function saveSelection() {
     projectId: state.projectId, agentId: state.agentId, sessionId: state.session?.id || null
   })); } catch { /* private browsing may disable storage */ }
 }
+function isCompact() { return window.matchMedia('(max-width:660px)').matches; }
+function syncPanels() {
+  q('#toggle-sidebar').setAttribute('aria-expanded', String(isCompact() && ui.app.classList.contains('mobile-sidebar-open')));
+  q('#toggle-inspector').setAttribute('aria-expanded', String(isCompact()
+    ? ui.app.classList.contains('mobile-inspector-open')
+    : !ui.app.classList.contains('inspector-hidden')));
+}
 function closeMobileSidebar() {
   ui.app.classList.remove('mobile-sidebar-open');
-  q('#toggle-sidebar').setAttribute('aria-expanded', 'false');
+  syncPanels();
+}
+function closeMobilePanels() {
+  ui.app.classList.remove('mobile-sidebar-open', 'mobile-inspector-open');
+  syncPanels();
 }
 
 
@@ -178,7 +192,7 @@ function renderHeader() {
   const canCompose = Boolean(state.session && a?.installed);
   ui.composer.disabled = !canCompose;
   ui.send.disabled = !canCompose || sending;
-  q('#new-session').disabled = !state.projectId || !a?.installed;
+  q('#new-session').disabled = creatingSession || !state.projectId || !a?.installed;
   q('#new-session').title = !a?.installed ? 'CLI is not installed; see diagnostics' : '';
   ui.composer.placeholder = state.session && !a?.installed ? 'CLI unavailable: install it, then refresh diagnostics' : !state.session ? '点击「新建会话」开始' : '给 Agent 发送任务，支持拖入文件...';
 }
@@ -209,6 +223,20 @@ function createMessage({ role, text, createdAt, attachments = [] }, draft = fals
 }
 function renderConversation() {
   const nearBottom = ui.conversation.scrollHeight - ui.conversation.scrollTop - ui.conversation.clientHeight < 180;
+  const key = conversationRenderKey(state.session);
+  const hasContent = Boolean(state.session && (state.session.messages.length || state.session.draft));
+  // Streaming fragments update only the in-progress bubble, not every historical
+  // message. This preserves scrolled position, text selection, and file buttons.
+  if (hasContent && key === renderedConversationKey) {
+    const draftBody = ui.conversation.querySelector('.draft-message .message-body');
+    if (draftBody) {
+      const next = state.session.draft || '任务已提交，正在等待 Agent 响应...';
+      if (draftBody.textContent !== next) draftBody.textContent = next;
+    }
+    if (nearBottom) ui.conversation.scrollTop = ui.conversation.scrollHeight;
+    return;
+  }
+  renderedConversationKey = hasContent ? key : null;
   clear(ui.conversation);
   const body = node('div', 'conversation-inner');
   if (!state.session || (!state.session.messages.length && !state.session.draft)) {
@@ -264,6 +292,7 @@ function renderFiles() {
     btn.onclick = () => file.type === 'dir' ? void openDirectory(file.path) : void showPreview(file.path);
     if (file.type === 'file') btn.addEventListener('dragstart', event => {
       event.dataTransfer.setData('application/x-agentdock-file', file.path);
+      event.dataTransfer.setData('application/x-agentdock-project', state.projectId || '');
       event.dataTransfer.setData('text/plain', file.path);
       event.dataTransfer.effectAllowed = 'copy';
     });
@@ -545,14 +574,23 @@ async function switchProject(projectId) {
   }
 }
 async function newSession() {
+  if (creatingSession) return;
   if (!state.projectId) return toast('请先添加本地项目');
   if (!agent()?.installed) return toast('本机没有检测到该 Agent 的 CLI。请先安装并完成登录。');
+  const projectId = state.projectId;
+  const agentId = state.agentId;
+  const epoch = viewEpoch;
+  creatingSession = true;
+  renderHeader();
   try {
-    const s = await api('/api/sessions', { method: 'POST', data: { projectId: state.projectId, agentId: state.agentId } });
+    const s = await api('/api/sessions', { method: 'POST', data: { projectId, agentId } });
     await refresh();
-    await selectSession(s.id);
-    ui.composer.focus();
+    if (epoch === viewEpoch && state.projectId === projectId && state.agentId === agentId) {
+      await selectSession(s.id);
+      ui.composer.focus();
+    } else requestRefresh(true);
   } catch (err) { toast(err.message); }
+  finally { creatingSession = false; renderHeader(); }
 }
 async function loadFiles() {
   const ticket = ++fileEpoch;
@@ -589,6 +627,7 @@ async function showPreview(relative) {
   } catch (err) { if (ticket === previewEpoch) toast(err.message); }
 }
 function attachProjectFile(rel) {
+  if (!state.session || !agent()?.installed) return toast('请先选择可用的 Agent 会话');
   if (!rel || state.attachments.some(f => f.path === rel)) return;
   if (state.attachments.length >= 12) return toast('单次消息最多添加 12 个文件');
   state.attachments.push({ path: rel, name: rel.split('/').at(-1) });
@@ -665,15 +704,21 @@ function bindUI() {
   q('#cancel-project').onclick = () => ui.dialog.close();
   q('#project-form').addEventListener('submit', async event => {
     event.preventDefault();
+    if (addingProject) return;
     const form = event.currentTarget;
+    const submit = form.querySelector('[type="submit"]');
     const values = Object.fromEntries(new FormData(form).entries());
+    addingProject = true;
+    submit.disabled = true;
     try {
       const p = await api('/api/projects', { method: 'POST', data: values });
       ui.dialog.close(); form.reset();
-      await refresh({ bootstrap: true });
+      if (!state.projects.some(project => project.id === p.id)) state.projects.push(p);
       await switchProject(p.id);
+      requestRefresh(true);
       toast('本地项目已添加');
     } catch (err) { toast(err.message); }
+    finally { addingProject = false; submit.disabled = false; }
   });
   ui.mode.onchange = () => { ui.worktree.disabled = ui.mode.value !== 'edit'; if (ui.worktree.disabled) ui.worktree.checked = false; };
   q('#send-message').onclick = () => void sendMessage();
@@ -712,15 +757,24 @@ function bindUI() {
     catch (err) { toast(err.message); }
   };
   q('#toggle-inspector').onclick = () => {
-    if (window.matchMedia('(max-width:660px)').matches) ui.app.classList.toggle('mobile-inspector-open');
-    else ui.app.classList.toggle('inspector-hidden');
+    if (isCompact()) {
+      ui.app.classList.remove('mobile-sidebar-open');
+      ui.app.classList.toggle('mobile-inspector-open');
+    } else ui.app.classList.toggle('inspector-hidden');
+    syncPanels();
   };
   q('#toggle-sidebar').onclick = () => {
-    const open = ui.app.classList.toggle('mobile-sidebar-open');
-    q('#toggle-sidebar').setAttribute('aria-expanded', String(open));
+    ui.app.classList.remove('mobile-inspector-open');
+    ui.app.classList.toggle('mobile-sidebar-open');
+    syncPanels();
   };
-  q('#mobile-backdrop').onclick = closeMobileSidebar;
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMobileSidebar(); });
+  q('#mobile-backdrop').onclick = closeMobilePanels;
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMobilePanels(); });
+  window.addEventListener('resize', () => {
+    if (!isCompact()) closeMobilePanels();
+    else syncPanels();
+  });
+  syncPanels();
   q('#reload-files').onclick = () => void loadFiles();
   let searchTimer = null;
   ui.search.addEventListener('input', () => {
@@ -761,7 +815,11 @@ function bindUI() {
     if (e.dataTransfer.files?.length) await uploadFiles([...e.dataTransfer.files]);
     else {
       const rel = e.dataTransfer.getData('application/x-agentdock-file');
-      if (rel) attachProjectFile(rel);
+      if (rel) {
+        const origin = e.dataTransfer.getData('application/x-agentdock-project');
+        if (!acceptsInternalDrag(origin, state.projectId)) toast('文件来自其他项目，请在当前项目重新选择');
+        else attachProjectFile(rel);
+      }
     }
   });
 }

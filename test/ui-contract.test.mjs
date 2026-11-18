@@ -26,7 +26,7 @@ test('history and Git changes use text nodes, never arbitrary HTML injection', (
 
 test('V0.6 multi-window status and agent activity timeline have safe UI contracts', () => {
   assert.match(html, /id="connection-state"/);
-  assert.match(html, /v0\.9/);
+  assert.match(html, /v0\.10/);
   assert.match(js, /events\.addEventListener\('ready'/);
   assert.match(js, /requestRefresh\(payload\.scope === 'catalog'\)/);
   assert.match(js, /session\?\.activity \|\| \[\]/);
@@ -61,4 +61,15 @@ test('V0.9 provider marks and empty-session action are safe', () => {
   assert.match(js, /welcome-action/);
   assert.match(js, /agentVendor/);
   assert.doesNotMatch(js, /insertAdjacentHTML\s*\(/);
+});
+
+test('V0.10 duplicate-submission guards, retained streaming DOM and mobile drawers', () => {
+  assert.match(js, /if \(creatingSession\) return;/);
+  assert.match(js, /if \(addingProject\) return;/);
+  assert.match(js, /key === renderedConversationKey/);
+  assert.match(js, /conversationRenderKey/);
+  assert.match(js, /acceptsInternalDrag/);
+  assert.match(html, /aria-controls="inspector"/);
+  assert.match(html, /aria-controls="project-sidebar"/);
+  assert.match(js, /closeMobilePanels/);
 });

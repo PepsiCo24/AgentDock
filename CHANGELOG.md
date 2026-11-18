@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 (2026-11-18)
+
+- Guard session and project creation against repeated clicks, retaining the current navigation context when a request finishes.
+- Reuse historical message DOM during streamed updates, preserving scroll and selections instead of rebuilding the full chat on every event.
+- Coordinate the mobile project and file drawers with accessible toggle state, backdrop and Escape close behavior.
+- Reject cross-project internal file drags to avoid attaching a same-named path from the wrong workspace.
+- Add deterministic UI-state and interface-contract regression tests. Real remote CLI authentication and owner-device browser testing remain pending.
+
+
 ## 0.9.0 (2026-11-18)
 
 - Replace placeholder Agent initials with locally served Codex, Claude Code and Antigravity identification marks; document provenance and trademark limits.
