@@ -10,6 +10,8 @@ import { Runner } from '../src/agents.mjs';
 import { createApp } from '../src/server.mjs';
 import { createIsolatedWorktree, worktreeFilePatch } from '../src/worktrees.mjs';
 
+const appVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
 const fake = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
 const pause = ms => new Promise(r => setTimeout(r, ms));
 async function until(check, ms = 3000) {
@@ -122,7 +124,7 @@ test('reset HTTP requires token, current ID and idle session', async t => {
   t.after(async()=>{await new Promise(r=>app.server.close(r));fs.rmSync(dir,{recursive:true,force:true})});
   const boot=await (await fetch(base+'/api/bootstrap')).json();
   assert.match(boot.bootId,/^[a-f0-9-]{36}$/);
-  assert.equal(boot.version,'0.9.0');
+  assert.equal(boot.version,appVersion);
   const project=app.store.addProject({name:'Demo',path:dir});
   const session=app.store.addSession({projectId:project.id,agentId:'codex'});
   session.remoteId='valid-id';app.store.save();

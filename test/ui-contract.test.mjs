@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const appVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.resolve(here, '../public/index.html'), 'utf8');
 const js = fs.readFileSync(path.resolve(here, '../public/app.js'), 'utf8');
@@ -26,7 +28,7 @@ test('history and Git changes use text nodes, never arbitrary HTML injection', (
 
 test('V0.6 multi-window status and agent activity timeline have safe UI contracts', () => {
   assert.match(html, /id="connection-state"/);
-  assert.match(html, /v0\.10/);
+  assert.ok(html.includes('v' + appVersion.split('.').slice(0, 2).join('.')), 'UI version should match package.json');
   assert.match(js, /events\.addEventListener\('ready'/);
   assert.match(js, /requestRefresh\(payload\.scope === 'catalog'\)/);
   assert.match(js, /session\?\.activity \|\| \[\]/);

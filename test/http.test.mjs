@@ -8,6 +8,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/server.mjs';
 
+const appVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
 const fake = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
 async function setup(t, appOptions = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdock-http-'));
@@ -281,12 +283,12 @@ test('Per-file diff API is read-only, bounds file types and rejects unrelated pa
 
 test('V0.6 bootstrap includes a process identity that changes after restart', async t => {
   const a = await setup(t);
-  assert.equal(a.bootstrap.version, '0.10.0');
+  assert.equal(a.bootstrap.version, appVersion);
   assert.match(a.bootstrap.bootId, /^[0-9a-f-]{36}$/);
   const b = await setup(t);
   assert.notEqual(a.bootstrap.bootId, b.bootstrap.bootId);
   const health = await (await fetch(`${a.base}/api/health`)).json();
-  assert.equal(health.version, '0.10.0');
+  assert.equal(health.version, appVersion);
 });
 
 test('SSE announces boot ID and broadcasts session/project catalog mutations across windows', async t => {
