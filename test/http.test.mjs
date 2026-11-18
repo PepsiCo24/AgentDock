@@ -417,3 +417,17 @@ test('V0.9 local provider logos are SVG-only and prevent arbitrary file access',
   }
   assert.equal((await fetch(base + '/brands/unknown.svg')).status, 404);
 });
+
+test('HIG UI assets are local-only and safely content typed', async t => {
+  const { base } = await setup(t);
+  const css = await fetch(`${base}/apple-hig.css`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get('content-type') || '', /^text\/css/);
+  assert.match((await css.text()), /--ui-accent/);
+  const logic = await fetch(`${base}/appearance.mjs`);
+  assert.equal(logic.status, 200);
+  assert.match(logic.headers.get('content-type') || '', /^text\/javascript/);
+  assert.match((await logic.text()), /resolveAppearance/);
+  const disallowed = await fetch(`${base}/apple-hig-secret.css`);
+  assert.equal(disallowed.status, 404);
+});

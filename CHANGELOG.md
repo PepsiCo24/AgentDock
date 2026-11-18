@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.0 (2026-11-18)
+
+- Refine AgentDock using the independent apple-ui-design skill and Apple's public HIG; no proprietary Apple resources.
+- Add semantic dark/light appearance and system-following preference stored locally in the browser.
+- Add scoped session search, search results count and Cmd/Ctrl+K navigation shortcut.
+- Simplify toolbar, sidebar, conversation and inspector surfaces; strengthen readable type, focus and state feedback.
+- Preserve existing Agent marks, API contracts, execution controls and local state format.
+- Add UI-state, static-asset, accessible markup and color-scheme regression tests.
+- Local browser screenshot remains unverified where headless Chrome is blocked by the execution environment.
+
+
+
 ## 0.10.0 (2026-11-18)
 
 - Guard session and project creation against repeated clicks, retaining the current navigation context when a request finishes.

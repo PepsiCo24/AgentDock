@@ -11,7 +11,7 @@ import { worktreeChanges, worktreeFileDiff, worktreeFilePatch } from './worktree
 const here = path.dirname(fileURLToPath(import.meta.url));
 const staticDir = path.resolve(here, '../public');
 const sampleRoot = path.resolve(here, '../examples/sample-project');
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.11.0';
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 700 * 1024;
@@ -269,7 +269,7 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
           return json(res, 200, { opened: true });
         }
       }
-      if (req.method === 'GET' && (pathname === '/' || ['/app.js', '/ui-state.mjs', '/styles.css', '/favicon.svg', '/brands/codex.svg', '/brands/claude-code.svg', '/brands/antigravity.svg'].includes(pathname))) {
+      if (req.method === 'GET' && (pathname === '/' || ['/app.js', '/ui-state.mjs', '/styles.css', '/apple-hig.css', '/appearance.mjs', '/favicon.svg', '/brands/codex.svg', '/brands/claude-code.svg', '/brands/antigravity.svg'].includes(pathname))) {
         const file = path.join(staticDir, pathname === '/' ? 'index.html' : pathname.slice(1));
         const mime = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
         res.writeHead(200, { 'Content-Type': `${mime}; charset=utf-8`, 'Cache-Control': 'no-store' });

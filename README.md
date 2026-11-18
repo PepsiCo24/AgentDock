@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.10 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.11 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
@@ -134,3 +134,14 @@ The agent rail uses **local self-hosted** Codex, Claude Code and Google Antigrav
 - Relative file paths dragged from the project explorer are checked against their source project before being attached.
 - This is still a loopback-only, single-user tool. Browser interaction on the user's physical computer and authenticated vendor CLI operation remain unverified.
 
+## V0.11 · Apple HIG-inspired workbench
+
+The new UI uses the community [apple-ui-design](https://github.com/629611312/apple-ui-design) skill as a design review reference, alongside [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/). This is **not** an official Apple skill, nor an Apple app replica. No Apple logo, SF Symbols or bundled Apple fonts are used.
+
+- System, light, and dark appearances (stored only in this browser) with synchronized preferences across open windows.
+- Focusable session search scoped to the current project and Agent; `⌘K` / `Ctrl+K` focuses search.
+- Reduced visual noise: restrained split-view chrome, opaque reading surfaces, type hierarchy and shared semantic color tokens.
+- Distinct hover, selection, focus, disabled and operational status treatments; reduced-motion, forced-colors and touch-size fallbacks.
+- Project data, CLI orchestration and API routes are unchanged apart from adding static UI assets and the version number.
+
+Read [docs/APPLE_UI_REVIEW.md](docs/APPLE_UI_REVIEW.md) for the design audit and acceptance limits.

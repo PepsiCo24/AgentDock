@@ -1,8 +1,10 @@
 import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag } from './ui-state.mjs';
+import { normalizeAppearance, resolveAppearance, filterSessions } from './appearance.mjs';
 const q = selector => document.querySelector(selector);
 const ui = {
   app: q('#app'), agents: q('#agent-tabs'), projectSelect: q('#project-select'), projectPath: q('#project-path'),
-  sessions: q('#session-list'), avatar: q('#header-avatar'), title: q('#header-title'),
+  sessions: q('#session-list'), sessionSearch: q('#session-search'), sessionCount: q('#session-count'),
+  appearance: q('#appearance-select'), avatar: q('#header-avatar'), title: q('#header-title'),
   subtitle: q('#header-subtitle'), conversation: q('#conversation'), composer: q('#composer'),
   chips: q('#attachment-chips'), queue: q('#queue-indicator'), stop: q('#stop-task'), send: q('#send-message'),
   fileList: q('#file-list'), currentDir: q('#current-dir'), previewTitle: q('#preview-title'),
@@ -33,6 +35,23 @@ let historyLoading = false;
 const sessionDrafts = new Map();
 function rememberDraft() {
   if (state.session?.id) sessionDrafts.set(state.session.id, ui.composer.value);
+}
+const appearanceKey = 'agentdock.appearance.v1';
+const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)');
+function readAppearance() {
+  try { return normalizeAppearance(localStorage.getItem(appearanceKey)); }
+  catch { return 'system'; }
+}
+function applyAppearance(choice, { persist = false } = {}) {
+  const selected = normalizeAppearance(choice);
+  const effective = resolveAppearance(selected, systemAppearance.matches);
+  document.documentElement.dataset.theme = effective;
+  ui.appearance.value = selected;
+  const theme = document.querySelector('meta[name="theme-color"]');
+  if (theme) theme.setAttribute('content', effective === 'dark' ? '#14161b' : '#f5f5f7');
+  if (persist) {
+    try { localStorage.setItem(appearanceKey, selected); } catch { /* storage unavailable */ }
+  }
 }
 const selectionKey = 'agentdock.selection.v1';
 function readSelection() {
@@ -127,6 +146,7 @@ function renderAgents() {
     const btn = node('button', `agent-button${a.id === state.agentId ? ' selected' : ''}${a.installed ? '' : ' disabled'}`);
     btn.title = a.installed ? a.description : `${a.description}（未检测到 CLI）`;
     btn.setAttribute('aria-label', `${a.name}${a.installed ? '' : '，未安装'}`);
+    btn.setAttribute('aria-pressed', String(a.id === state.agentId));
     const avatar = node('span', 'agent-avatar brand-avatar');
     applyBrandMark(avatar, a.id, a.short);
     btn.style.setProperty('--agent-accent', a.color);
@@ -151,13 +171,19 @@ function renderProjects() {
 }
 function renderSessions() {
   clear(ui.sessions);
-  const list = sessionsForCurrent();
+  const all = sessionsForCurrent();
+  const query = ui.sessionSearch.value;
+  const list = filterSessions(all, query);
+  ui.sessionCount.textContent = query.trim() ? `${list.length}/${all.length}` : String(all.length);
   if (!list.length) {
-    ui.sessions.append(node('div', 'sidebar-empty', '当前 Agent 暂无会话。\n点击「新建会话」开始。'));
+    ui.sessions.append(node('div', 'sidebar-empty', all.length
+      ? '没有匹配的会话。\n请尝试其他关键词。'
+      : '当前 Agent 暂无会话。\n点击「新建会话」开始。'));
     return;
   }
   for (const s of list) {
     const btn = node('button', `session-item${s.id === state.session?.id ? ' active' : ''}`);
+    if (s.id === state.session?.id) btn.setAttribute('aria-current', 'true');
     const icon = node('span', 'session-icon', '◌');
     const meta = node('div', 'session-meta');
     meta.append(node('div', 'session-name', s.title));
@@ -689,6 +715,18 @@ async function sendMessage() {
   finally { sending = false; renderHeader(); }
 }
 function bindUI() {
+  applyAppearance(readAppearance());
+  ui.appearance.addEventListener('change', () => applyAppearance(ui.appearance.value, { persist: true }));
+  systemAppearance.addEventListener('change', () => { if (readAppearance() === 'system') applyAppearance('system'); });
+  window.addEventListener('storage', event => { if (event.key === appearanceKey) applyAppearance(readAppearance()); });
+  ui.sessionSearch.addEventListener('input', renderSessions);
+  document.addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      if (isCompact()) { ui.app.classList.remove('mobile-inspector-open'); ui.app.classList.add('mobile-sidebar-open'); syncPanels(); }
+      ui.sessionSearch.focus(); ui.sessionSearch.select();
+    }
+  });
   ui.historyMore.onclick = () => void loadHistory(true);
   q('#new-session').onclick = () => void newSession();
   q('#diagnose-agents').onclick = async () => {

@@ -75,3 +75,23 @@ test('V0.10 duplicate-submission guards, retained streaming DOM and mobile drawe
   assert.match(html, /aria-controls="project-sidebar"/);
   assert.match(js, /closeMobilePanels/);
 });
+
+test('V0.11 HIG-inspired UI exposes searchable sidebar and theme choices', () => {
+  assert.match(html, /id="session-search"/);
+  assert.match(html, /id="session-count"/);
+  assert.match(html, /id="appearance-select"/);
+  assert.match(html, /value="system"/);
+  assert.match(html, /value="light"/);
+  assert.match(html, /value="dark"/);
+  assert.match(html, /href="\/apple-hig\.css"/);
+  assert.match(js, /resolveAppearance/);
+  assert.match(js, /filterSessions/);
+  assert.match(js, /event\.key\.toLowerCase\(\) === 'k'/);
+  assert.match(js, /aria-pressed/);
+  assert.match(js, /aria-current/);
+  const css = fs.readFileSync(path.resolve(here, '../public/apple-hig.css'), 'utf8');
+  assert.match(css, /:root\[data-theme='light'\]/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.match(css, /forced-colors: active/);
+  assert.doesNotMatch(css, /fonts\.googleapis|sf-symbols|apple-logo/i);
+});

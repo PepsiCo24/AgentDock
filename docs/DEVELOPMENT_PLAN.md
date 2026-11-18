@@ -85,3 +85,11 @@ npm test
 - 用户仅可显式重试失败/中断任务，且可写任务需要重新批准；历史为每会话最多 150 条元数据，复用原消息作为重试输入。
 - 每个 Git 变更文件通过只读 diff 端点检查；不执行自动应用、合并或删除。
 - 详细机制见 `docs/RUN_HISTORY.md`。
+
+## V0.11 HIG-inspired UI iteration (2026-11-18)
+
+- Adopted the independent community `apple-ui-design` web/admin design review alongside the official Apple HIG, preserving AgentDock branding and native browser components.
+- Added system/light/dark preference, local-only persistence, filtered session list and Cmd/Ctrl+K navigation.
+- Added a semantic token stylesheet to reduce visual noise and to keep the primary conversation dominant.
+- All AI Agent CLI protocols, worktree execution and user data remain unchanged.
+- Limitations and device acceptance checklist: `docs/APPLE_UI_REVIEW.md`.
