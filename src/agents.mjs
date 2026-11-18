@@ -232,6 +232,17 @@ export class Runner extends EventEmitter {
     return this.send(sessionId, original.text, original.attachments || [],
       historical.mode, historical.workspaceMode || 'project', historical.id);
   }
+  /** Explicitly start a fresh remote CLI context without erasing local chat/history. */
+  resetRemote(sessionId, expectedRemoteId) {
+    const session = this.store.session(sessionId);
+    if (session.agentId === 'demo' || !session.remoteId) throw new InputError('No remote CLI session to disconnect', 409);
+    if (typeof expectedRemoteId !== 'string' || expectedRemoteId !== session.remoteId) throw new InputError('Remote session changed in another window; refresh before resetting', 409);
+    if (this.active.has(sessionId) || this.awaiting.has(sessionId) || session.queue.length) throw new InputError('Cannot reset remote context while tasks are active, queued or awaiting approval', 409);
+    session.remoteId = null;
+    session.remoteResetAt = new Date().toISOString();
+    this.activity(session, 'Remote CLI context disconnected manually; local history retained', 'session');
+    return { reset: true, remoteId: null, remoteResetAt: session.remoteResetAt };
+  }
   approve(sessionId, jobId) {
     const session = this.store.session(sessionId);
     const job = this.awaiting.get(sessionId);
@@ -475,6 +486,11 @@ export class Runner extends EventEmitter {
         remoteId: isolated?.remoteId || session.remoteId || null
       });
       if (output.trim() && !active.cancelled) this.store.addMessage(session, 'assistant', output.trim());
+      if (error && resumedFrom && !active.cancelled) {
+        // Do NOT assume the resume ID caused the error, or replay a possibly mutating task.
+        this.store.updateRun(session, job.id, { resumeWarning: true });
+        this.activity(session, 'A resumed CLI task failed; cause unknown. Manual reset and explicit retry are available.', 'error', job.id);
+      }
       if (error && !active.cancelled) this.store.addMessage(session, 'system', error);
       if (active.cancelled) this.store.addMessage(session, 'system', '任务已停止，后续队列已清空。');
       session.draft = '';

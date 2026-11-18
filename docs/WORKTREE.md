@@ -47,3 +47,7 @@ git -C '/path/to/original/repo' worktree remove '/path/to/your/isolated/worktree
 - 仅允许预览 `git status` 中当前真正变更的相对路径；已追踪文本文件对比 `HEAD`，未追踪文本文件有 36 KiB 原始大小限制，展示最多 72 Ki 字符。
 - 不展开符号链接目标、不渲染二进制内容，也不自动合并、删除、恢复或清理任何文件。
 - 如果显示截断或特殊类型提示，请使用本地 IDE 和 `git diff` 自行完整审查。
+
+## V0.6 text patch export (manual review only)
+
+Per changed file, `GET /api/sessions/:sid/workspaces/:id/patch?path=<relative>` can export a complete, bounded, UTF-8 text patch. A download may contain sensitive project content. Symlink, binary, truncated, oversized and unsupported files are not exported. The service does not execute `git apply`, merge or push. Review and apply independently in a trusted Git client.

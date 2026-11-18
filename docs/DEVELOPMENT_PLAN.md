@@ -1,6 +1,6 @@
 # AgentDock 开发路线图
 
-2026-11-18 · V0.5 原型开发
+2026-11-18 · V0.6 原型开发
 
 ## 产品边界
 
@@ -14,7 +14,7 @@
 | V0.3.1 | 在真实 CLI 环境跑版本矩阵、权限/会话恢复和桌面文件操作；修复适配差异 | 待实施，需要真实登录 CLI 设备 |
 | **V0.4** | 执行历史持久化、故障/重启中断标记、人工重试并重审可写授权、逐文件 Git 差异预览 | 本地实现/模拟自动化测试完成；真机 UI 待验收 |
 | **V0.5** | CLI 会话 ID/命令适配、增量 NDJSON 与终结事件校验、SSE 多窗口同步、重启令牌刷新 | 模拟协议及本地集成测试完成；真实厂商登录 CLI 尚未验收 |
-| V0.6（规划） | 真实 CLI 版本兼容矩阵、系统级隔离评估、桌面打包可行性 | 待实施 |
+| **V0.6** | 真实 CLI 版本兼容矩阵、系统级隔离评估、桌面打包可行性 | 待实施 |
 
 ## V0.2 授权流程
 
@@ -76,3 +76,7 @@ npm test
 - 用户仅可显式重试失败/中断任务，且可写任务需要重新批准；历史为每会话最多 150 条元数据，复用原消息作为重试输入。
 - 每个 Git 变更文件通过只读 diff 端点检查；不执行自动应用、合并或删除。
 - 详细机制见 `docs/RUN_HISTORY.md`。
+
+## V0.6 implementation notes
+
+Implemented explicit, task-safe remote CLI reset and manual failure recovery; a stale identifier is rejected and no task is automatically re-run. Export read-only, bounded text-only Git patches for review. Add JSON `--version` diagnostics and restore multi-window SSE bootId/catalog handling in the published frontend. Authenticated vendor CLI acceptance and OS-native isolation remain future work.

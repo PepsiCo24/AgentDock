@@ -127,3 +127,29 @@ export function worktreeFileDiff(workspace, relative) {
   }
   return { path: relative, status: entry.status, kind: 'text', content: raw.slice(0, MAX_DIFF_CHARS), truncated: raw.length > MAX_DIFF_CHARS };
 }
+
+
+/** Download-only, bounded patch for one reviewed text file; never applies changes. */
+export function worktreeFilePatch(workspace, relative) {
+  const preview = worktreeFileDiff(workspace, relative);
+  if (preview.kind !== 'text' || preview.truncated) throw new InputError('Only complete, text-only diffs can be exported', 422);
+  if (/[\x00-\x1f\x7f"\\]/.test(relative)) throw new InputError('This filename requires review in a local Git client', 422);
+  if (preview.status !== '??') return { path: relative, content: preview.content };
+  const root = fs.realpathSync(workspace.path);
+  const absolute = path.resolve(root, relative);
+  if (!within(root, absolute)) throw new InputError('File is outside the worktree', 403);
+  const info = fs.lstatSync(absolute);
+  if (!info.isFile() || info.isSymbolicLink() || !within(root, fs.realpathSync(absolute))) throw new InputError('Special files cannot be exported', 422);
+  const bytes = fs.readFileSync(absolute);
+  const value = bytes.toString('utf8');
+  if (!Buffer.from(value, 'utf8').equals(bytes)) throw new InputError('Invalid UTF-8 file cannot be exported as a text patch', 422);
+  if (!value.length) throw new InputError('Empty new file requires a local Git client for patch export', 422);
+  const lines = value.split('\n');
+  const trailingNewline = value.endsWith('\n');
+  if (trailingNewline) lines.pop();
+  const header = `diff --git a/${relative} b/${relative}\nnew file mode 100644\n--- /dev/null\n+++ b/${relative}\n@@ -0,0 +1,${lines.length} @@\n`;
+  const body = lines.map((line, i) => `+${line}\n${i === lines.length - 1 && !trailingNewline ? '\\ No newline at end of file\n' : ''}`).join('');
+  const content = header + body;
+  if (Buffer.byteLength(content, 'utf8') > MAX_DIFF_CHARS) throw new InputError('Patch exceeds review size limit', 422);
+  return { path: relative, content };
+}

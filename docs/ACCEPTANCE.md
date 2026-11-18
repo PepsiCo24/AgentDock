@@ -1,4 +1,4 @@
-# AgentDock V0.5 测试与验收说明
+# AgentDock V0.6 测试与验收说明
 
 最后本地测试：2026-11-17 · Linux · Node.js v22.16.0。
 
@@ -14,7 +14,7 @@ npm run diagnose
 
 ## 本地 HTTP 验收
 
-- `GET /api/health` 应返回 `{"status":"ok","version":"0.5.0"}`。
+- `GET /api/health` 应返回 `{"status":"ok","version":"0.6.0"}`。
 - `GET /api/sessions/:id/runs` 可分页，不把完整待执行队列作为 HTTP 响应公开。
 - 未带正确 `X-AgentDock-Token` 的 POST 重试返回 403；不可重试任务返回 409。
 - 重试可写任务需要再次批准；重启前的队列/批准全部失效。
@@ -38,3 +38,7 @@ npm run diagnose
 - `npm test`：64/64 通过，涵盖 CLI 续接参数、UTF-8 NDJSON、缺失任务终结事件、SSE 广播及进程标识。
 - GitHub Actions 本版 CI 成功。
 - 只完成本地模拟与接口测试，真实厂商 CLI 的登录及执行仍待验收。
+
+## V0.6 acceptance
+
+Use `npm run check && npm test`, plus `npm run diagnose -- --json`. Verify reset endpoint requires the local write token and matching expected remote ID, does not erase local messages, and refuses running/queued/pending approvals. Verify a mock resumed CLI failure emits a warning without auto-replay. A complete exported text patch must pass `git apply --check` in a clean test repository without changing the source. The production system must not auto-apply or merge patches. Vendor CLI authentication and real desktop sessions have not been validated.

@@ -29,3 +29,9 @@ npm start
 - [Codex CLI 命令行选项](https://learn.chatgpt.com/docs/cli/reference)
 - [Claude Code CLI 参考](https://code.claude.com/docs/en/cli-reference)
 - [Antigravity CLI 参考](https://antigravity.google/docs/cli/reference/)
+
+## V0.6 version diagnostics and recovery boundary
+
+`npm run diagnose -- --json` emits a safe local metadata summary (platform, architecture, Node version and CLI version), not a credentials or authentication audit. CLI install and version do **not** imply end-to-end compatibility.
+
+After a resumed run fails, inspect changes and manually choose the reset control if needed. It clears only AgentDock's stored remote CLI continuation ID. Local chat and run history remain; no failed job is automatically replayed. Running, queued and awaiting-approval tasks block reset.

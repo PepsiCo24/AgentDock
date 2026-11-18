@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 · 2026-11-18
+
+- Added explicit remote CLI continuation reset; local chat/history stays intact. Reject stale-window resets and resets while running, queued or awaiting approval.
+- Record a non-causal advisory for failed resumed runs. Do not auto-retry or automatically reset possibly mutating work.
+- Export complete bounded single-file text Git patches for manual review. Refuse symlinks, binary, large/truncated and unsupported files. Never auto-apply.
+- Add machine-readable local CLI version diagnostic report; login credentials and authenticated vendor CLI compatibility are not examined.
+- Restored full SSE catalog sync and boot-id based multi-window reconnect in the published browser app.
+- Local source package passed 75 automated checks; GitHub CI verifies repository tests separately. Real CLI and OS-native drag remain unverified.
+
 ## 0.5.0 · 2026-11-18
 
 - 新增 UTF-8 安全的有界 NDJSON 解析器和协议异常/无终结事件检测，原始异常输出不出现在 UI。

@@ -9,14 +9,15 @@ const ui = {
   toast: q('#toast'), uploadInput: q('#upload-input'),
   approvalPanel: q('#approval-panel'), approvalSummary: q('#approval-summary'), mode: q('#execution-mode'),
   activityList: q('#activity-list'), runMetrics: q('#run-metrics'), search: q('#file-search'), worktree: q('#use-worktree'),
-  runHistory: q('#run-history'), historyCount: q('#history-count'), historyMore: q('#history-more')
+  runHistory: q('#run-history'), historyCount: q('#history-count'), historyMore: q('#history-more'), connection: q('#connection-state'), resetRemote: q('#reset-cli-context')
 };
 const state = {
   token: '', agents: [], projects: [], sessions: [], session: null, agentId: 'demo', projectId: null,
   currentDir: '.', files: [], attachments: [], preview: null, connected: false, reloading: false, searchText: '',
-  runHistory: [], historyTotal: 0
+  runHistory: [], historyTotal: 0, bootId: null
 };
 let refreshTimer = null;
+let needsCatalogRefresh = false;
 let toastTimer = null;
 
 async function api(endpoint, { method = 'GET', data = null, binary = false } = {}) {
@@ -107,6 +108,10 @@ function renderHeader() {
   ui.avatar.style.color = a?.color || '#fff';
   ui.title.textContent = a?.name || 'AgentDock';
   ui.subtitle.textContent = a?.installed ? statusText(state.session) : '未检测到对应的本地 CLI · 可查看已有会话';
+  ui.resetRemote.hidden = !state.session?.remoteId || state.session?.agentId === 'demo';
+  ui.resetRemote.disabled = Boolean(state.session && (
+    ['running', 'awaiting_approval', 'queued'].includes(state.session.status) || state.session.queueLength > 0
+  ));
   const running = state.session?.status === 'running';
   const waiting = state.session?.status === 'awaiting_approval';
   ui.stop.hidden = !(running || waiting);
@@ -242,6 +247,25 @@ function renderActivity() {
             } catch (err) { toast(err.message); }
           };
           row.append(btn);
+          const download = node('button', 'small-outline workspace-patch-download', 'Export patch');
+          download.title = 'Download a reviewed, complete text patch only (never auto-applied)';
+          download.onclick = async () => {
+            try {
+              const response = await fetch(`${route}/patch?path=${encodeURIComponent(file.path)}`);
+              if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                throw new Error(result.error || `Export failed (${response.status})`);
+              }
+              const blob = await response.blob();
+              const href = URL.createObjectURL(blob);
+              const a = node('a');
+              a.href = href;
+              a.download = `${workspace.id.slice(0, 8)}-${file.path.split(/[\\/]/).at(-1)}.patch`;
+              a.click();
+              setTimeout(() => URL.revokeObjectURL(href), 3000);
+            } catch (err) { toast(err.message); }
+          };
+          row.append(download);
           details.append(row);
         }
         if (data.truncated) details.append(node('p', 'workspace-empty', '超过显示上限，后续更改已截断'));
@@ -285,6 +309,9 @@ function renderHistory() {
     head.append(node('span', 'history-time', when), node('span', `history-status status-${record.status}`, runStatusText(record.status)));
     item.append(head, node('p', 'history-prompt', record.promptPreview || '历史任务'));
     const details = node('div', 'history-detail', `${record.mode === 'edit' ? '可写' : '受限'} · ${record.workspaceMode === 'worktree' ? 'Git 隔离' : '原项目'}${record.durationMs == null ? '' : ` · ${(record.durationMs / 1000).toFixed(1)}s`}`);
+    if (record.resumeWarning) {
+      details.append(node('span', 'history-resume-warning', ' · CLI continuation failed (cause unconfirmed); you may reset and retry manually'));
+    }
     item.append(details);
     if (record.retryable) {
       const button = node('button', 'small-outline history-retry', '重新执行');
@@ -325,13 +352,15 @@ function renderAll() {
   renderAgents(); renderProjects(); renderSessions(); renderHeader(); renderConversation(); renderAttachments(); renderFiles(); renderPreview(); renderActivity(); renderHistory();
 }
 async function refresh({ bootstrap = false } = {}) {
-  if (state.reloading) return;
+  if (state.reloading) { requestRefresh(bootstrap); return; }
   state.reloading = true;
   try {
+    const previousProject = state.projectId;
     const data = bootstrap ? await api('/api/bootstrap') : null;
     if (data) {
       state.token = data.token; state.agents = data.agents; state.projects = data.projects; state.sessions = data.sessions;
-      state.projectId = state.projectId || data.projects[0]?.id || null;
+      state.bootId = data.bootId || state.bootId;
+      if (!data.projects.some(p => p.id === state.projectId)) state.projectId = data.projects[0]?.id || null;
     } else state.sessions = await api('/api/sessions');
     if (state.session) {
       const previous = state.session;
@@ -341,13 +370,27 @@ async function refresh({ bootstrap = false } = {}) {
           previous.queueLength !== state.session.queueLength ||
           previous.lastRun?.finishedAt !== state.session.lastRun?.finishedAt) await loadHistory();
     }
-    renderAgents(); renderSessions(); renderHeader(); renderConversation(); renderActivity();
+    if (previousProject !== state.projectId) { state.currentDir = '.'; state.preview = null; await loadFiles(); }
+    renderAgents(); renderProjects(); renderSessions(); renderHeader(); renderConversation(); renderActivity();
   } catch (err) { toast(err.message); }
   finally { state.reloading = false; }
 }
-function requestRefresh() {
+function requestRefresh(bootstrap = false) {
+  needsCatalogRefresh ||= bootstrap;
   if (refreshTimer) return;
-  refreshTimer = setTimeout(() => { refreshTimer = null; void refresh(); }, 130);
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    const rebuild = needsCatalogRefresh;
+    needsCatalogRefresh = false;
+    void refresh({ bootstrap: rebuild });
+  }, 130);
+}
+function showConnectionStatus(online) {
+  state.connected = online;
+  if (ui.connection) {
+    ui.connection.textContent = online ? '● 已同步' : '○ 正在重连';
+    ui.connection.classList.toggle('connection-offline', !online);
+  }
 }
 async function selectSession(id) {
   try {
@@ -485,6 +528,17 @@ function bindUI() {
     try { await api(`/api/sessions/${state.session.id}/reject`, { method: 'POST', data: { jobId: state.session.pendingApproval.id } }); await refresh(); }
     catch (err) { toast(err.message); }
   };
+  ui.resetRemote.onclick = async () => {
+    if (!state.session?.remoteId) return;
+    const sid = state.session.id;
+    const expectedRemoteId = state.session.remoteId;
+    if (!window.confirm('Disconnect CLI continuation for this AgentDock session? Local messages remain; the next task starts fresh. Any pending task must finish first.')) return;
+    try {
+      await api(`/api/sessions/${sid}/reset-remote`, { method: 'POST', data: { expectedRemoteId } });
+      await refresh();
+      toast('CLI continuation disconnected. The next task will use a fresh remote context.');
+    } catch (err) { toast(err.message); requestRefresh(); }
+  };
   q('#open-window').onclick = () => {
     if (!state.session) return toast('请先选择会话');
     window.open(`/?session=${encodeURIComponent(state.session.id)}`, '_blank', 'noopener');
@@ -547,6 +601,7 @@ async function main() {
     state.agents = bootstrap.agents;
     state.projects = bootstrap.projects;
     state.sessions = bootstrap.sessions;
+    state.bootId = bootstrap.bootId || null;
     state.projectId = state.projects[0]?.id || null;
     state.agentId = 'demo';
     const sid = new URLSearchParams(location.search).get('session');
@@ -560,10 +615,21 @@ async function main() {
     await loadHistory();
     renderAll();
     const events = new EventSource('/api/events');
-    events.onopen = () => { state.connected = true; };
-    events.addEventListener('change', () => requestRefresh());
-    events.onerror = () => { state.connected = false; };
-    setInterval(() => { if (!state.connected) requestRefresh(); }, 3000);
+    events.onopen = () => showConnectionStatus(true);
+    events.addEventListener('ready', event => {
+      let bootId;
+      try { bootId = JSON.parse(event.data).bootId; } catch { return; }
+      if (state.bootId && bootId && state.bootId !== bootId) requestRefresh(true);
+      state.bootId = bootId || state.bootId;
+      showConnectionStatus(true);
+    });
+    events.addEventListener('change', event => {
+      let payload = {};
+      try { payload = JSON.parse(event.data); } catch { /* safe refresh */ }
+      requestRefresh(payload.scope === 'catalog');
+    });
+    events.onerror = () => showConnectionStatus(false);
+    setInterval(() => { if (!state.connected) requestRefresh(true); }, 3000);
   } catch (err) {
     toast(`初始化失败：${err.message}`);
     console.error(err);

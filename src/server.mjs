@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Store, InputError, resolveProjectFile, within } from './core.mjs';
 import { installedAgents, agentDiagnostics, Runner } from './agents.mjs';
-import { worktreeChanges, worktreeFileDiff } from './worktrees.mjs';
+import { worktreeChanges, worktreeFileDiff, worktreeFilePatch } from './worktrees.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const staticDir = path.resolve(here, '../public');
@@ -109,6 +109,7 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
   const store = new Store({ dataDir, sampleRoot });
   const runner = new Runner(store, { demoDelay, ...(spawnImpl ? { spawnImpl } : {}) });
   const token = randomBytes(32).toString('hex');
+  const bootId = randomUUID();
   const server = http.createServer((req, res) => {
     // Strict host check prevents DNS-rebinding access to privileged local endpoints.
     const host = req.headers.host || '';
@@ -132,13 +133,13 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
         throw new InputError('缺少本地会话安全令牌', 403);
       }
       if (req.method === 'GET' && pathname === '/api/bootstrap') {
-        return json(res, 200, { token, agents: installedAgents(), projects: store.projects(), sessions: store.sessions(), version: '0.4.0' });
+        return json(res, 200, { token, agents: installedAgents(), projects: store.projects(), sessions: store.sessions(), bootId, version: '0.6.0' });
       }
       if (req.method === 'GET' && pathname === '/api/agents/diagnostics') return json(res, 200, agentDiagnostics());
-      if (req.method === 'GET' && pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.4.0' });
+      if (req.method === 'GET' && pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.6.0' });
       if (req.method === 'GET' && pathname === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-        res.write('event: ready\ndata: {}\n\n');
+        res.write(`event: ready\ndata: ${JSON.stringify({ bootId })}\n\n`);
         const listener = event => { if (!res.writableEnded) res.write(`event: change\ndata: ${JSON.stringify(event)}\n\n`); };
         runner.on('change', listener);
         const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 25000);
@@ -146,10 +147,14 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
         return;
       }
       if (req.method === 'POST' && pathname === '/api/projects') {
-        return json(res, 201, store.addProject(await readJson(req)));
+        const project = store.addProject(await readJson(req));
+        runner.emit('change', { scope: 'catalog', action: 'project' });
+        return json(res, 201, project);
       }
       if (req.method === 'POST' && pathname === '/api/sessions') {
-        return json(res, 201, store.addSession(await readJson(req)));
+        const session = store.addSession(await readJson(req));
+        runner.emit('change', { scope: 'catalog', action: 'session' });
+        return json(res, 201, session);
       }
       if (req.method === 'GET' && pathname === '/api/sessions') return json(res, 200, store.sessions());
       const runRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/runs(?:\/([0-9a-f-]+)\/retry)?$/i);
@@ -165,7 +170,7 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
           return json(res, 202, runner.retry(runRoute[1], runRoute[2]));
         }
       }
-      const sessionRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(messages|stop|approve|reject))?$/i);
+      const sessionRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(messages|stop|approve|reject|reset-remote))?$/i);
       if (sessionRoute) {
         const id = sessionRoute[1];
         const action = sessionRoute[2];
@@ -173,6 +178,7 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
         if (req.method === 'PATCH' && !action) {
           const data = await readJson(req);
           store.renameSession(store.session(id), data.title);
+          runner.emit('change', { scope: 'catalog', action: 'rename', sessionId: id });
           return json(res, 200, store.sessionView(id));
         }
         if (req.method === 'POST' && action === 'messages') {
@@ -183,6 +189,10 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
           await readJson(req);
           return json(res, 200, runner.stop(id));
         }
+        if (req.method === 'POST' && action === 'reset-remote') {
+          const data = await readJson(req);
+          return json(res, 200, runner.resetRemote(id, data.expectedRemoteId));
+        }
         if (req.method === 'POST' && action === 'approve') {
           const data = await readJson(req);
           return json(res, 200, runner.approve(id, data.jobId));
@@ -192,7 +202,7 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
           return json(res, 200, runner.reject(id, data.jobId));
         }
       }
-      const workspaceRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/workspaces\/([0-9a-f-]+)\/(changes|diff|reveal)$/i);
+      const workspaceRoute = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/workspaces\/([0-9a-f-]+)\/(changes|diff|patch|reveal)$/i);
       if (workspaceRoute) {
         const session = store.session(workspaceRoute[1]);
         const workspace = (session.workspaces || []).find(w => w.id === workspaceRoute[2]);
@@ -206,6 +216,13 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
         if (req.method === 'GET' && workspaceRoute[3] === 'changes') return json(res, 200, worktreeChanges(workspace));
         if (req.method === 'GET' && workspaceRoute[3] === 'diff') {
           return json(res, 200, worktreeFileDiff(workspace, url.searchParams.get('path')));
+        }
+        if (req.method === 'GET' && workspaceRoute[3] === 'patch') {
+          const result = worktreeFilePatch(workspace, url.searchParams.get('path'));
+          const name = path.basename(result.path).replace(/[\\"\r\n]/g, '_') + '.patch';
+          res.writeHead(200, { 'Content-Type': 'text/x-diff; charset=utf-8', 'Cache-Control': 'no-store',
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}` });
+          return res.end(result.content);
         }
         if (req.method === 'POST' && workspaceRoute[3] === 'reveal') {
           await readJson(req);

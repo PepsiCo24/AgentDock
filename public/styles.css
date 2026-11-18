@@ -12,6 +12,12 @@
 .workspace-summary { display: grid; gap: 7px; border: 1px solid #314050; border-radius: 9px; padding: 10px; margin-bottom: 10px; overflow-wrap: anywhere; font-size: 12px; }
 .workspace-path { user-select: text; font-size: 11px; opacity: .8; }
 .workspace-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.workspace-patch-download { font-size: 10px; padding: 4px 7px; }
+.history-resume-warning { color: #e6ae88; }
+#reset-cli-context:disabled { opacity: .35; cursor: not-allowed; }
+.connection-state{font-size:10px;color:#9fceb0;padding:7px 8px;border:1px solid #355a49;border-radius:16px;white-space:nowrap}
+.connection-state.connection-offline{color:#e5b481;border-color:#6c5137}
+@media(max-width:880px){.connection-state{display:none}}
 .workspace-changes { white-space: pre-wrap; font-size: 11px; max-height: 190px; overflow: auto; }
 
 #diagnose-agents { font-size: 11px; margin-right: 5px; }
