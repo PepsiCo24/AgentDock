@@ -40,7 +40,10 @@ function worktree(t) {
   git(root,'config','user.name','Test');
   fs.writeFileSync(path.join(root,'README.md'),'before\n');
   git(root,'add','README.md'); git(root,'commit','-q','-m','baseline');
-  const wt = createIsolatedWorktree({projectRoot:root,dataDir:store.dir,jobId:'fc162aea-8a77-4e64-8c10-c1ad9516a79d'});
+  // Worktree directory must be outside the Git project, matching production safety rules.
+  const worktreeData = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdock-wt-v06-'));
+  t.after(() => fs.rmSync(worktreeData, {recursive: true, force: true}));
+  const wt = createIsolatedWorktree({projectRoot:root,dataDir:worktreeData,jobId:'fc162aea-8a77-4e64-8c10-c1ad9516a79d'});
   return {root,store,wt};
 }
 test('explicit remote reset retains history, rejects stale IDs and starts fresh', async t => {
