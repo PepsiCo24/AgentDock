@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.4 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.5 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
@@ -40,10 +40,13 @@ agy --version
 
 参考官方说明：[Codex CLI](https://learn.chatgpt.com/docs/cli/reference)、[Claude Code CLI](https://code.claude.com/docs/en/cli-reference)、[Antigravity CLI](https://antigravity.google/docs/cli/headless/)。
 
-## 3. V0.4 功能与状态
+## 3. V0.5 功能与状态
 
 | 功能 | 说明 |
 | --- | --- |
+| 多窗口同步 | SSE 目录广播与服务进程 `bootId` 检查；重启后重获本地写入令牌，断线按快照重连 | 
+| CLI 会话续接 | 对 Codex、Claude、Antigravity 续接参数与会话 ID 做校验，记录上下文来源；不代表已与官方桌面 App 同步 | 
+| CLI 流式事件 | 使用有大小限制的 UTF-8 NDJSON 解析，支持 Claude 文本增量事件、要求终结事件，工具输入和命令参数不返回 UI | 
 | 多 Agent / 项目 / 会话 | Agent、项目和会话独立管理；全局默认最多 3 个同时执行的任务，超出的排队 |
 | Git worktree 隔离写入 | 可写任务可选从 Git HEAD 新建独立 worktree；完成后可查看路径、变更和打开文件管理器，**不自动合并** |
 | 逐文件差异审查 | 在 Git 隔离工作区点击变更文件即可查看**只读且有上限**的文本差异；不显示符号链接目标文件内容、二进制及大型未跟踪文件；不自动应用改动 |
@@ -67,6 +70,7 @@ agy --version
 
 ```text
 src/core.mjs             状态、项目、历史分页/迁移、目录范围保护和文件名搜索
+src/ndjson.mjs           UTF-8 NDJSON 事件分帧和大小限制
 src/agents.mjs           Agent 适配、并发限流、执行队列、显式重试、授权和运行状态
 src/worktrees.mjs        Git worktree 创建、附件镜像、变更列表及只读单文件 diff
 src/server.mjs           127.0.0.1 本地 HTTP/SSE API、上传/预览/下载
@@ -76,6 +80,7 @@ docs/DEVELOPMENT_PLAN.md 路线图与验收边界
 docs/WORKTREE.md        worktree 的安全边界与手动回收
 docs/RUN_HISTORY.md     历史持久化、重试和 HTTP 接口说明
 docs/CLI_COMPATIBILITY.md CLI 真实环境验收矩阵
+docs/MULTI_WINDOW.md    SSE 跨窗口同步和重启边界
 scripts/diagnose.mjs    非认证式 CLI 版本诊断
 .github/workflows/ci.yml Node 20 / Node 22 CI
 ```
