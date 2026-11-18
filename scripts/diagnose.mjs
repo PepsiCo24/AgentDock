@@ -1,4 +1,5 @@
 import { agentDiagnostics } from '../src/agents.mjs';
+
 const flags = process.argv.slice(2);
 if (flags.some(flag => flag !== '--json')) {
   console.error('Usage: node scripts/diagnose.mjs [--json]');

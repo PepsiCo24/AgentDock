@@ -1,7 +1,24 @@
-# V0.6 Browser multi-window synchronization
+# V0.5 多窗口同步与断线恢复
 
-Each independent browser window connects to the local SSE /api/events endpoint. A ready event contains a random bootId. When the server restarts, a different bootId triggers a fresh /api/bootstrap request, including a new write token, agents, projects and session catalog.
+## 能力
 
-Project and session creation/renaming broadcast scope:catalog change events. Ordinary activity sends change events that refresh the selected session. A disconnected browser periodically requests a fresh snapshot; it does not replay queued work. Browsers must stay connected to the same trusted localhost service.
+- 多个同源浏览器窗口复用 AgentDock 本地 HTTP 服务。
+- `/api/events` 为 SSE，连接后发送 `ready` 消息，包含当前服务进程随机 `bootId`。
+- 新增项目、新建会话、重命名时发送 `{scope:"catalog"}`；任务活动以 `change` 消息发送最新状态提示。浏览器按需 GET 快照，不透传原始模型或工具负载。
+- 断线重连后，如 `bootId` 变化，前端重新获取 `/api/bootstrap`，因此本地写操作使用新进程的令牌。失去连接时标记“正在重连”，并每三秒尝试快照刷新。
+- 新开窗口通过 `/?session=<id>` 选择会话；其他窗口中的会话内容在新快照中同步。窗口共享后台运行器及同一任务队列。
 
-Browser windows are NOT standalone vendor desktop-app windows. Native drag between system applications and shared vendor desktop-app history are not guaranteed.
+## 边界
+
+- SSE 不是全量持久化事件日志。断线期间的中间事件可能丢失，但连接恢复后会拉取最新状态。
+- 新窗口目前是独立浏览器标签/窗口，不是 Tauri 原生桌面窗口；不实现跨窗口原生拖放或系统级文件授权。
+- 当前仅绑定 `127.0.0.1`，浏览器必须在运行 AgentDock 的同一台电脑访问；不支持局域网或云端远程控制。
+- 项目或 Agent 切换后，用户应检查当前面板所示项目与会话再执行写操作。
+
+## 手动验收
+
+1. `npm start` 后同时打开两个工作台窗口，分别停留在不同 Agent/会话。
+2. 在窗口 A 添加项目、新建会话与重命名，在窗口 B 观察目录同步并选择会话。
+3. 在 A 运行 Demo 任务，观察 B 显示最新队列和结果。
+4. 重启 Node.js 服务，B 应显示重连并恢复；确认新的写操作不再因旧令牌而报 403。
+5. 在 A 批准可写任务，确认 B 仅显示最新状态，绝不自动替用户批准。

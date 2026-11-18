@@ -1,22 +1,34 @@
 # Changelog
 
-## 0.6.0 · 2026-11-18
+## 0.7.0 (2026-11-18)
 
-- Added explicit remote CLI continuation reset; local chat/history stays intact. Reject stale-window resets and resets while running, queued or awaiting approval.
-- Record a non-causal advisory for failed resumed runs. Do not auto-retry or automatically reset possibly mutating work.
-- Export complete bounded single-file text Git patches for manual review. Refuse symlinks, binary, large/truncated and unsupported files. Never auto-apply.
-- Add machine-readable local CLI version diagnostic report; login credentials and authenticated vendor CLI compatibility are not examined.
-- Restored full SSE catalog sync and boot-id based multi-window reconnect in the published browser app.
-- Local source package passed 75 automated checks; GitHub CI verifies repository tests separately. Real CLI and OS-native drag remain unverified.
+- Fixed session/project/agent navigation races and prevented sending a task to the previous session while switching.
+- Restored tab-local session selection and isolated per-session drafts; stopped automatic Demo-session creation when any session already exists.
+- Prevented duplicate submits and preflight-checked attachment limits; blocked cross-project attachment after asynchronous upload.
+- Refreshed CLI installation status after diagnosis; added a responsive mobile sidebar and inspector toggle.
+- Exposed edit authorization while global CLI slots are full; approved jobs wait for a slot rather than bypassing concurrency limits.
+- Throttled high-frequency CLI stream persistence and SSE to prevent file-system overload.
+- Fixed directory sorting before the 300-item cap and corrected the runtime version label.
+- Expanded UI, backend, streaming, HTTP and navigation regression tests. Full live-browser and authenticated vendor CLI testing remain pending.
+
+
+## 0.6.0 (2026-11-18)
+
+- Explicitly disconnect a stale remote CLI session ID without deleting AgentDock message history. A stale-tab ID is rejected, and reset is blocked while any task is running, queued, or pending approval.
+- A failure during a resumed CLI task now records an advisory warning. It does not imply the resume ID was the cause, and it never silently clears context or retries possibly mutating work.
+- Worktree review can export **one complete, bounded, text-only Git patch** for manual inspection. It refuses binary files, symlinks, oversized/unreadable files, unsupported path quoting and truncated diffs. No automatic apply/merge occurs.
+- `npm run diagnose -- --json` exports a limited local compatibility preflight report. No credentials/authentication probe; vendor CLI acceptance must still run on a device with the vendor installed and signed in.
+- Added reset/retry, Git patch validity (`git apply --check`), HTTP authorization and diagnostic tests. Vendor CLI E2E and desktop-app session sharing remain unverified.
 
 ## 0.5.0 · 2026-11-18
 
-- 新增 UTF-8 安全的有界 NDJSON 解析器和协议异常/无终结事件检测，原始异常输出不出现在 UI。
-- 规范 Codex、Claude Code、Antigravity 会话续接参数；验证远程会话 ID，防止其成为命令行选项或路径。
-- 增加 Claude Code `text_delta` 增量事件处理，记录 `resumeMode`、`resumedFrom` 与远程会话 ID。
-- 工具活动显示脱敏后的工具类别与阶段，不展示原始工具调用、参数和 stderr。
-- 通过 SSE 广播项目/会话目录变更，使用 `bootId` 判断服务重启并同步状态与写入令牌。
-- 本地 64 项测试通过，GitHub Actions CI 通过；真实登录的厂商 CLI 尚未验证。
+- 新增 UTF-8 安全的有界 NDJSON 解析器和协议异常/无终结事件检测，异常原始输出不出现在 UI。
+- 规范 Codex、Claude Code、Antigravity 会话续接参数；验证远程会话 ID，防止其作为命令行选项或路径使用。
+- 增加 Claude Code `text_delta` 流事件处理，并记录 `resumeMode`、`resumedFrom` 和实际返回的远程会话 ID。
+- 工具活动显示脱敏后的工具类别与阶段；不展示原始工具调用、参数和 stderr。
+- 通过 SSE 广播项目/会话目录变更，使用 `bootId` 判断服务重启，浏览器重连后同步最新快照与本地写令牌。
+- 新增协议、NDJSON、安全和 SSE 测试。64 项本地测试通过，并在 GitHub Actions CI 通过。
+- 仍未验证真实厂商 CLI 的登录与模型运行环境；原生 App 会话共享、实时逐工具审批和系统级多窗口拖放不在本版范围内。
 
 ## 0.4.0 · 2026-11-17
 

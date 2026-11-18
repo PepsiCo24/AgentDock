@@ -85,3 +85,20 @@ test('CLI arguments and stream events preserve session IDs and displayed result'
   assert.equal(interpretEvent('claude', { type: 'result', session_id: '123', result: 'OK' }).final, 'OK');
   assert.equal(interpretEvent('antigravity', { event: 'result', result: { status: 'SUCCESS', response: 'OK' } }).final, 'OK');
 });
+
+test('project explorer always shows directories before applying the 300 item cap', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdock-file-order-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new Store({ dataDir: path.join(root, 'private-data') });
+  const project = store.addProject({ name: 'Large', path: root });
+  for (let i = 0; i < 305; i++) {
+    fs.writeFileSync(path.join(root, `file-${String(i).padStart(4, '0')}.txt`), 'x');
+  }
+  fs.mkdirSync(path.join(root, 'zzz-important'));
+  const files = store.files(project.id);
+  assert.equal(files.length, 300);
+  assert.ok(files.some(f => f.name === 'zzz-important' && f.type === 'dir'));
+  const firstFile = files.findIndex(f => f.type === 'file');
+  assert.ok(firstFile > 0);
+  assert.ok(files.slice(0, firstFile).every(f => f.type === 'dir'));
+});

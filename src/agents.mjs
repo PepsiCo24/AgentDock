@@ -17,12 +17,15 @@ const MODES = new Set(['plan', 'edit']);
 const WORKSPACE_MODES = new Set(['project', 'worktree']);
 const MAX_WORKTREES_PER_SESSION = 30;
 const MAX_OUTPUT = 100_000;
+const STREAM_UPDATE_INTERVAL_MS = 120;
 const TOOL_LABELS = Object.freeze({
   command_execution: '运行命令', file_change: '更新文件', mcp_tool_call: '扩展工具',
   web_search: '搜索资料', agent_message: 'Agent 回复', reasoning: '内部推理',
   tool_use: '调用工具', read_file: '读取文件', write_to_file: '写入文件',
   run_command: '运行命令', ask_permission: '请求权限', user_input: '用户输入'
 });
+
+/** A CLI-supplied resume ID is never allowed to become an option or a path. */
 export function validatedRemoteId(remoteId) {
   if (remoteId === null || remoteId === undefined || remoteId === '') return null;
   if (typeof remoteId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(remoteId)) {
@@ -90,13 +93,14 @@ function safeUsage(usage) {
   return Object.keys(out).length ? out : undefined;
 }
 
-// Only allow event type/status labels from fixed vocabulary. Never surface raw tool inputs.
+// Only allow event type/status labels from fixed vocabulary. Tool inputs, command
+// arguments, raw JSON and reasoning are never exposed to any browser client.
 export function interpretEvent(agentId, event) {
   if (!event || typeof event !== 'object') return {};
   if (agentId === 'codex') {
-    if (event.type === 'thread.started') return {
-      remoteId: validatedRemoteId(event.thread_id), activity: 'Codex 会话已连接', kind: 'session'
-    };
+    if (event.type === 'thread.started') {
+      return { remoteId: validatedRemoteId(event.thread_id), activity: 'Codex 会话已连接', kind: 'session' };
+    }
     if (event.type === 'turn.started') return { activity: '开始运行', kind: 'status' };
     if (event.type === 'item.started' || event.type === 'item.completed') {
       const type = event.item?.type;
@@ -104,8 +108,7 @@ export function interpretEvent(agentId, event) {
         return { append: typeof event.item.text === 'string' ? event.item.text : '' };
       }
       if (type && type !== 'agent_message') {
-        return { activity: (TOOL_LABELS[type] || '工具步骤') + ' · ' +
-          (event.type === 'item.completed' ? '完成' : '进行中'), kind: 'tool' };
+        return { activity: `${TOOL_LABELS[type] || '工具步骤'} · ${event.type === 'item.completed' ? '完成' : '进行中'}`, kind: 'tool' };
       }
     }
     if (event.type === 'turn.completed') return { usage: safeUsage(event.usage), activity: '本轮完成', kind: 'result' };
@@ -115,26 +118,24 @@ export function interpretEvent(agentId, event) {
   }
   if (agentId === 'claude') {
     const remoteId = validatedRemoteId(event.session_id);
-    if (event.type === 'system' && event.subtype === 'init') return {
-      remoteId, activity: 'Claude 会话已连接', kind: 'session'
-    };
-    if (event.type === 'stream_event' && event.event?.type === 'content_block_delta' &&
-        event.event?.delta?.type === 'text_delta') {
+    if (event.type === 'system' && event.subtype === 'init') return { remoteId, activity: 'Claude 会话已连接', kind: 'session' };
+    if (event.type === 'stream_event' && event.event?.type === 'content_block_delta' && event.event?.delta?.type === 'text_delta') {
       const delta = event.event.delta.text;
       return { remoteId, ...(typeof delta === 'string' ? { append: delta, partial: true } : {}) };
     }
     if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
-      const txt = event.message.content.filter(x => x?.type === 'text').map(x => x.text || '').join('\n');
-      const tools = event.message.content.some(x => x?.type === 'tool_use');
-      return { remoteId, ...(txt ? { current: txt } : {}), ...(tools ? { activity: '调用工具', kind: 'tool' } : {}) };
+      const text = event.message.content.filter(x => x?.type === 'text').map(x => x.text || '').join('\n');
+      const hasTools = event.message.content.some(x => x?.type === 'tool_use');
+      return { remoteId, ...(text ? { current: text } : {}), ...(hasTools ? { activity: '调用工具', kind: 'tool' } : {}) };
     }
-    if (event.type === 'result') return {
-      remoteId, final: typeof event.result === 'string' ? event.result : '',
-      usage: safeUsage(event.usage),
-      error: event.is_error ? 'Claude 任务失败，请在本机终端检查 CLI' : undefined,
-      activity: event.is_error ? '任务失败' : '任务完成',
-      kind: event.is_error ? 'error' : 'result'
-    };
+    if (event.type === 'result') {
+      return {
+        remoteId, final: typeof event.result === 'string' ? event.result : '',
+        usage: safeUsage(event.usage),
+        error: event.is_error ? 'Claude 任务失败，请在本机终端检查 CLI' : undefined,
+        activity: event.is_error ? '任务失败' : '任务完成', kind: event.is_error ? 'error' : 'result'
+      };
+    }
     return remoteId ? { remoteId } : {};
   }
   if (agentId === 'antigravity') {
@@ -143,22 +144,21 @@ export function interpretEvent(agentId, event) {
     };
     if (event.event === 'step_update') {
       const step = event.step_update || {};
-      if (step.step_type === 'agent_response') return {
-        append: typeof step.text_delta === 'string' ? step.text_delta : '', usage: safeUsage(step.usage)
-      };
+      if (step.step_type === 'agent_response') {
+        return { append: typeof step.text_delta === 'string' ? step.text_delta : '', usage: safeUsage(step.usage) };
+      }
       const label = TOOL_LABELS[step.step_type] || 'Agent 步骤';
-      const state = { DONE: '完成', RUNNING: '进行中', IN_PROGRESS: '进行中',
-        ERROR: '失败', FAILED: '失败' }[step.state] || '更新';
-      return { activity: label + ' · ' + state, kind: 'tool', usage: safeUsage(step.usage) };
+      const state = { DONE: '完成', RUNNING: '进行中', IN_PROGRESS: '进行中', ERROR: '失败', FAILED: '失败' }[step.state] || '更新';
+      return { activity: `${label} · ${state}`, kind: 'tool', usage: safeUsage(step.usage) };
     }
     if (event.event === 'result') {
-      const success = event.result?.status === 'SUCCESS';
+      const successful = event.result?.status === 'SUCCESS';
       return {
         remoteId: validatedRemoteId(event.result?.conversation_id),
         final: typeof event.result?.response === 'string' ? event.result.response : '',
         usage: safeUsage(event.result?.usage),
-        error: success ? undefined : 'Antigravity 任务失败，请在本机终端检查 CLI',
-        activity: success ? '任务完成' : '任务失败', kind: success ? 'result' : 'error'
+        error: successful ? undefined : 'Antigravity 任务失败，请在本机终端检查 CLI',
+        activity: successful ? '任务完成' : '任务失败', kind: successful ? 'result' : 'error'
       };
     }
   }
@@ -235,9 +235,15 @@ export class Runner extends EventEmitter {
   /** Explicitly start a fresh remote CLI context without erasing local chat/history. */
   resetRemote(sessionId, expectedRemoteId) {
     const session = this.store.session(sessionId);
-    if (session.agentId === 'demo' || !session.remoteId) throw new InputError('No remote CLI session to disconnect', 409);
-    if (typeof expectedRemoteId !== 'string' || expectedRemoteId !== session.remoteId) throw new InputError('Remote session changed in another window; refresh before resetting', 409);
-    if (this.active.has(sessionId) || this.awaiting.has(sessionId) || session.queue.length) throw new InputError('Cannot reset remote context while tasks are active, queued or awaiting approval', 409);
+    if (session.agentId === 'demo' || !session.remoteId) {
+      throw new InputError('No remote CLI session to disconnect', 409);
+    }
+    if (typeof expectedRemoteId !== 'string' || expectedRemoteId !== session.remoteId) {
+      throw new InputError('Remote session changed in another window; refresh before resetting', 409);
+    }
+    if (this.active.has(sessionId) || this.awaiting.has(sessionId) || session.queue.length) {
+      throw new InputError('Cannot reset remote context while tasks are active, queued or awaiting approval', 409);
+    }
     session.remoteId = null;
     session.remoteResetAt = new Date().toISOString();
     this.activity(session, 'Remote CLI context disconnected manually; local history retained', 'session');
@@ -304,8 +310,9 @@ export class Runner extends EventEmitter {
     return { stopped: Boolean(active || waiting || queued.length) };
   }
   schedule() {
+    // Approval is not a CLI execution slot: notify users of editable jobs
+    // even when all worker slots are busy.
     for (const session of this.store.state.sessions) {
-      if (this.active.size >= this.maxConcurrent) break;
       if (session.queue.length && !this.active.has(session.id) && !this.awaiting.has(session.id)) {
         void this.runNext(session.id);
       }
@@ -314,8 +321,22 @@ export class Runner extends EventEmitter {
   async runNext(sessionId) {
     if (this.active.has(sessionId) || this.awaiting.has(sessionId)) return;
     const session = this.store.session(sessionId);
+    const next = session.queue[0];
+    if (!next) return;
+    if (next.mode === 'edit' && !next.approved) {
+      const job = session.queue.shift();
+      this.awaiting.set(sessionId, job);
+      session.status = 'awaiting_approval';
+      this.store.updateRun(session, job.id, { status: 'awaiting_approval' });
+      session.pendingApproval = {
+        id: job.id, summary: job.prompt.slice(0, 180),
+        workspaceMode: job.workspaceMode, createdAt: new Date().toISOString()
+      };
+      this.activity(session, 'Awaiting explicit approval for an editable task');
+      return;
+    }
     if (this.active.size >= this.maxConcurrent) {
-      if (session.queue.length) {
+      if (session.status !== 'queued') {
         session.status = 'queued';
         this.store.save();
         this.emitUpdate(session);
@@ -323,21 +344,12 @@ export class Runner extends EventEmitter {
       return;
     }
     const job = session.queue.shift();
-    if (!job) return;
-    if (job.mode === 'edit' && !job.approved) {
-      this.awaiting.set(sessionId, job);
-      session.status = 'awaiting_approval';
-      this.store.updateRun(session, job.id, { status: 'awaiting_approval' });
-      session.pendingApproval = { id: job.id, summary: job.prompt.slice(0, 180), workspaceMode: job.workspaceMode, createdAt: new Date().toISOString() };
-      this.activity(session, '等待用户批准可写任务');
-      return;
-    }
     await this.runJob(sessionId, job);
   }
   async runJob(sessionId, job) {
     if (this.active.has(sessionId)) throw new Error('Session already running');
     const session = this.store.session(sessionId);
-    const active = { cancelled: false, child: null, forceKill: null, resolveDemo: null };
+    const active = { cancelled: false, child: null, forceKill: null, resolveDemo: null, progressTimer: null, lastProgressAt: 0 };
     this.active.set(sessionId, active);
     const started = Date.now();
     session.status = 'running';
@@ -349,10 +361,31 @@ export class Runner extends EventEmitter {
     let output = '';
     let error = '';
     const previousRemoteId = session.remoteId;
+    // Invalid persisted IDs are rejected by buildInvocation within the guarded run path.
     const resumedFrom = job.workspaceMode === 'worktree' ? null : (typeof previousRemoteId === 'string' ? previousRemoteId : null);
     this.store.updateRun(session, job.id, { resumedFrom, resumeMode: job.workspaceMode === 'worktree' ? 'isolated' : resumedFrom ? 'resume' : 'new' });
     let isolated = null;
     let partialTextReceived = false;
+    // Coalesce fast token streams so one large CLI response does not synchronously
+    // rewrite state.json and broadcast SSE for every text chunk.
+    const publishProgress = () => {
+      if (active.progressTimer) return;
+      const elapsed = Date.now() - active.lastProgressAt;
+      if (elapsed >= STREAM_UPDATE_INTERVAL_MS) {
+        active.lastProgressAt = Date.now();
+        this.store.save();
+        this.emitUpdate(session);
+      } else {
+        active.progressTimer = setTimeout(() => {
+          active.progressTimer = null;
+          if (this.active.get(sessionId) !== active) return;
+          active.lastProgressAt = Date.now();
+          this.store.save();
+          this.emitUpdate(session);
+        }, STREAM_UPDATE_INTERVAL_MS - elapsed);
+        active.progressTimer.unref?.();
+      }
+    };
     const update = part => {
       if (part.remoteId && typeof part.remoteId === 'string') {
         const remoteId = validatedRemoteId(part.remoteId);
@@ -375,8 +408,7 @@ export class Runner extends EventEmitter {
       if (part.activity) this.activity(session, part.activity, part.kind, job.id);
       output = output.slice(-MAX_OUTPUT);
       session.draft = output;
-      this.store.save();
-      this.emitUpdate(session);
+      if (!part.activity) publishProgress();
     };
     try {
       const project = this.store.project(session.projectId);
@@ -422,9 +454,7 @@ export class Runner extends EventEmitter {
             if (finished) return;
             finished = true;
             clearTimeout(timer);
-            if (code !== 0 && !active.cancelled && !error) {
-              error = 'Agent 退出代码 ' + (code ?? '未知') + '，请在本机终端检查 CLI 状态';
-            }
+            if (code !== 0 && !active.cancelled && !error) error = `Agent 退出代码 ${code ?? '未知'}，请在本机终端检查 CLI 状态`;
             if (code === 0 && (!meaningfulEvents || !terminalEvent) && !active.cancelled && !error) {
               error = 'CLI 未返回完整的可识别任务结果，请检查本地 CLI 版本兼容性';
             }
@@ -436,7 +466,7 @@ export class Runner extends EventEmitter {
               cwd: spec.cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
               windowsHide: true, env: { ...process.env, NO_COLOR: '1' }
             });
-          } catch { error = '启动 CLI 失败'; resolve(); return; }
+          } catch (err) { error = '启动 CLI 失败'; resolve(); return; }
           active.child = child;
           timer = setTimeout(() => {
             error = '任务运行超时，已终止';
@@ -444,19 +474,21 @@ export class Runner extends EventEmitter {
           }, this.maxRunMs);
           timer.unref?.();
           child.on('error', err => {
-            error = err.code === 'ENOENT' ? spec.command + ' CLI 未安装或不在 PATH 中' : '启动 CLI 失败';
+            error = err.code === 'ENOENT' ? `${spec.command} CLI 未安装或不在 PATH 中` : '启动 CLI 失败';
             finish(-1);
           });
           child.stdout.on('data', chunk => {
             try { decoder.write(chunk); }
-            catch {
+            catch (err) {
               error = 'CLI 输出事件超过大小限制或格式错误';
               child.kill('SIGKILL');
             }
           });
+          // stderr may contain secrets or command output; deliberately never relay it.
           child.stderr.on('data', () => {});
           child.on('close', code => {
-            try { decoder.end(); } catch { if (!error) error = 'CLI 输出事件格式错误'; }
+            try { decoder.end(); }
+            catch { if (!error) error = 'CLI 输出事件格式错误'; }
             finish(code);
           });
           if (spec.input === null) child.stdin.end();
@@ -466,6 +498,8 @@ export class Runner extends EventEmitter {
       }
     } catch (err) { error = err instanceof InputError ? err.message : 'Agent 运行异常，请检查本地 CLI'; }
     finally {
+      if (active.progressTimer) clearTimeout(active.progressTimer);
+      active.progressTimer = null;
       if (isolated) {
         session.remoteId = previousRemoteId;
         try {

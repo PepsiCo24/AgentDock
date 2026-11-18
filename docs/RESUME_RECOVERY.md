@@ -1,15 +1,24 @@
-# AgentDock V0.6: Manual CLI continuation recovery
+# V0.6 - Manual CLI continuation recovery
 
-A failed resumed CLI task might have already modified project files. AgentDock does not infer that the saved session ID caused the failure, auto-clear the ID or replay the task.
+## Why reset is explicit
 
-1. Review the previous task's result and Git changes.
-2. Check the real CLI separately; \`npm run diagnose -- --json\` only reports version and never verifies login.
-3. Finish or stop all running, queued and pending-approval work.
-4. Choose **Reset CLI continuation** in the current AgentDock session header and confirm.
-5. AgentDock clears its saved remote CLI ID while retaining all local chat and run history. The next task starts a fresh vendor context.
-6. If required, explicitly retry the failed or interrupted task. Edit tasks require new approval and may have duplicate side effects.
+A resumed CLI task can fail for many reasons: authentication, incompatible CLI version, stale remote ID, permissions, a tool failure, or an interrupted process. AgentDock never guesses the root cause from stderr and never silently repeats a failed task. A previous task may already have edited files or consumed model tokens.
 
-Endpoint: POST /api/sessions/:id/reset-remote with the local X-AgentDock-Token header and JSON body {"expectedRemoteId":"<id>"}.
-A stale ID or a busy session yields HTTP 409. No vendor logout or deletion occurs.
+## Recovery procedure
 
-Patch export is read-only, bounded and manually reviewed; never auto-applies code. Authentic vendor CLI and desktop-app session continuity remain unverified.
+1. Inspect the failed task's status and any changes in the project/worktree.
+2. Check the CLI locally (`npm run diagnose -- --json`) and test vendor login with its own tooling.
+3. Wait for any running/queued/awaiting-approval tasks to finish, or stop them.
+4. In the header select **Reset CLI continuation**, review the confirmation, then approve the reset.
+5. The local AgentDock chat/history stays intact. The saved vendor CLI ID is cleared; the next CLI invocation starts a fresh context.
+6. To retry a failed or interrupted job, manually choose **Retry**. An editable task requires fresh approval and can cause duplicate side effects.
+
+The reset endpoint is `POST /api/sessions/:id/reset-remote` with JSON body `{ "expectedRemoteId": "<current-id>" }` and the standard local `X-AgentDock-Token` header. If another window has updated that ID, the request returns HTTP 409. A running, queued or pending-approval task also returns 409. Reset is not a vendor-side account logout or history deletion.
+
+## Patch export boundary
+
+An optional per-file patch export is read-only and size-limited. Never auto-apply a downloaded patch; check what files it changes in a trusted local Git client before applying.
+
+## Status
+
+Implemented and covered by local unit/integration tests. Real vendor CLI authentication, official app session sharing and native multiwindow file drag remain outside tested scope.

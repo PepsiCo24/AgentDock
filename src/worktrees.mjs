@@ -132,18 +132,30 @@ export function worktreeFileDiff(workspace, relative) {
 /** Download-only, bounded patch for one reviewed text file; never applies changes. */
 export function worktreeFilePatch(workspace, relative) {
   const preview = worktreeFileDiff(workspace, relative);
-  if (preview.kind !== 'text' || preview.truncated) throw new InputError('Only complete, text-only diffs can be exported', 422);
-  if (/[\x00-\x1f\x7f"\\]/.test(relative)) throw new InputError('This filename requires review in a local Git client', 422);
+  if (preview.kind !== 'text' || preview.truncated) {
+    throw new InputError('Only complete, text-only diffs can be exported', 422);
+  }
+  // Simplify Git patch headers rather than attempting to implement Git C-style quoting.
+  if (/[\x00-\x1f\x7f"\\]/.test(relative)) {
+    throw new InputError('This filename requires review in a local Git client', 422);
+  }
   if (preview.status !== '??') return { path: relative, content: preview.content };
+
   const root = fs.realpathSync(workspace.path);
   const absolute = path.resolve(root, relative);
   if (!within(root, absolute)) throw new InputError('File is outside the worktree', 403);
   const info = fs.lstatSync(absolute);
-  if (!info.isFile() || info.isSymbolicLink() || !within(root, fs.realpathSync(absolute))) throw new InputError('Special files cannot be exported', 422);
+  if (!info.isFile() || info.isSymbolicLink() || !within(root, fs.realpathSync(absolute))) {
+    throw new InputError('Special files cannot be exported', 422);
+  }
   const bytes = fs.readFileSync(absolute);
   const value = bytes.toString('utf8');
-  if (!Buffer.from(value, 'utf8').equals(bytes)) throw new InputError('Invalid UTF-8 file cannot be exported as a text patch', 422);
-  if (!value.length) throw new InputError('Empty new file requires a local Git client for patch export', 422);
+  if (!Buffer.from(value, 'utf8').equals(bytes)) {
+    throw new InputError('Invalid UTF-8 file cannot be exported as a text patch', 422);
+  }
+  if (!value.length) {
+    throw new InputError('Empty new file requires a local Git client for patch export', 422);
+  }
   const lines = value.split('\n');
   const trailingNewline = value.endsWith('\n');
   if (trailingNewline) lines.pop();

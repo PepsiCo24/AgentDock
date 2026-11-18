@@ -1,3 +1,4 @@
+import { startupSelection, uploadSlots, isCurrentFileView } from './ui-state.mjs';
 const q = selector => document.querySelector(selector);
 const ui = {
   app: q('#app'), agents: q('#agent-tabs'), projectSelect: q('#project-select'), projectPath: q('#project-path'),
@@ -19,6 +20,32 @@ const state = {
 let refreshTimer = null;
 let needsCatalogRefresh = false;
 let toastTimer = null;
+let sending = false;
+let uploading = false;
+let viewEpoch = 0;
+let fileEpoch = 0;
+let previewEpoch = 0;
+let historyEpoch = 0;
+let historyLoading = false;
+const sessionDrafts = new Map();
+function rememberDraft() {
+  if (state.session?.id) sessionDrafts.set(state.session.id, ui.composer.value);
+}
+const selectionKey = 'agentdock.selection.v1';
+function readSelection() {
+  try { return JSON.parse(sessionStorage.getItem(selectionKey) || '{}'); }
+  catch { return {}; }
+}
+function saveSelection() {
+  try { sessionStorage.setItem(selectionKey, JSON.stringify({
+    projectId: state.projectId, agentId: state.agentId, sessionId: state.session?.id || null
+  })); } catch { /* private browsing may disable storage */ }
+}
+function closeMobileSidebar() {
+  ui.app.classList.remove('mobile-sidebar-open');
+  q('#toggle-sidebar').setAttribute('aria-expanded', 'false');
+}
+
 
 async function api(endpoint, { method = 'GET', data = null, binary = false } = {}) {
   const options = { method, headers: {} };
@@ -120,9 +147,12 @@ function renderHeader() {
   ui.approvalSummary.textContent = waiting ? state.session.pendingApproval?.summary || '' : '';
   ui.worktree.disabled = ui.mode.value !== 'edit';
   if (ui.worktree.disabled) ui.worktree.checked = false;
-  ui.composer.disabled = !state.session;
-  ui.send.disabled = !state.session;
-  ui.composer.placeholder = !state.session ? '点击「新建会话」开始' : '给 Agent 发送任务，支持拖入文件...';
+  const canCompose = Boolean(state.session && a?.installed);
+  ui.composer.disabled = !canCompose;
+  ui.send.disabled = !canCompose || sending;
+  q('#new-session').disabled = !state.projectId || !a?.installed;
+  q('#new-session').title = !a?.installed ? 'CLI is not installed; see diagnostics' : '';
+  ui.composer.placeholder = state.session && !a?.installed ? 'CLI unavailable: install it, then refresh diagnostics' : !state.session ? '点击「新建会话」开始' : '给 Agent 发送任务，支持拖入文件...';
 }
 function createMessage({ role, text, createdAt, attachments = [] }, draft = false) {
   const wrap = node('article', `message ${role}${draft ? ' draft-message' : ''}`);
@@ -205,6 +235,7 @@ function renderPreview() {
   clear(ui.previewContent);
   const p = state.preview;
   ui.previewTitle.textContent = p?.name || '选择文件预览';
+  for (const id of ['#attach-preview', '#reveal-preview', '#download-preview']) q(id).disabled = !p;
   if (!p) return ui.previewContent.append(node('div', 'preview-empty', '选择文件即可在侧边预览'));
   if (p.kind === 'image') {
     const img = node('img');
@@ -218,6 +249,7 @@ function renderActivity() {
   const run = state.session?.lastRun;
   const usage = run?.usage;
   ui.runMetrics.textContent = !run ? '暂无执行记录' : `${run.mode === 'edit' ? '可写' : '受限'} · ${run.outcome === 'running' ? '运行中' : run.outcome === 'completed' ? '已完成' : run.outcome === 'stopped' ? '已停止' : '失败'}${run.durationMs == null ? '' : ` · ${(run.durationMs / 1000).toFixed(1)}s`}${usage ? ` · Token: ${usage.total_tokens ?? `${usage.input_tokens || 0} / ${usage.output_tokens || 0}`}` : ''}`;
+  const activitySessionId = state.session?.id;
   const workspaces = [...(state.session?.workspaces || [])].reverse().slice(0, 3);
   for (const workspace of workspaces) {
     const info = node('div', 'workspace-summary');
@@ -226,7 +258,8 @@ function renderActivity() {
     const changesButton = node('button', 'small-outline', '查看更改');
     changesButton.onclick = async () => {
       try {
-        const sessionId = state.session.id;
+        const sessionId = activitySessionId;
+        if (state.session?.id !== sessionId) return;
         const route = `/api/sessions/${sessionId}/workspaces/${workspace.id}`;
         const data = await api(`${route}/changes`);
         if (state.session?.id !== sessionId) return;
@@ -260,7 +293,7 @@ function renderActivity() {
               const href = URL.createObjectURL(blob);
               const a = node('a');
               a.href = href;
-              a.download = `${workspace.id.slice(0, 8)}-${file.path.split(/[\\/]/).at(-1)}.patch`;
+              a.download = `${workspace.id.slice(0, 8)}-${file.path.split(/[\/]/).at(-1)}.patch`;
               a.click();
               setTimeout(() => URL.revokeObjectURL(href), 3000);
             } catch (err) { toast(err.message); }
@@ -276,16 +309,18 @@ function renderActivity() {
     };
     const openButton = node('button', 'small-outline', '在文件管理器中打开');
     openButton.onclick = async () => {
-      try { await api(`/api/sessions/${state.session.id}/workspaces/${workspace.id}/reveal`, { method: 'POST', data: {} }); }
+      if (state.session?.id !== activitySessionId) return;
+      try { await api(`/api/sessions/${activitySessionId}/workspaces/${workspace.id}/reveal`, { method: 'POST', data: {} }); }
       catch (err) { toast(err.message); }
     };
     actions.append(changesButton, openButton);
     info.append(actions);
     ui.activityList.append(info);
   }
-  for (const event of [...(state.session?.activity || [])].reverse().slice(0, 12)) {
-    const item = node('div', 'activity-item');
-    item.append(node('span', 'activity-time', new Date(event.at).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})), node('span', '', event.label));
+  for (const event of [...(state.session?.activity || [])].reverse().slice(0, 20)) {
+    const item = node('div', `activity-item activity-${event.kind || 'status'}`);
+    const marker = ({ tool: '⌘', session: '↔', result: '✓', error: '!', status: '·' })[event.kind] || '·';
+    item.append(node('span', 'activity-marker', marker), node('span', 'activity-time', new Date(event.at).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})), node('span', '', event.label));
     ui.activityList.append(item);
   }
 }
@@ -302,6 +337,7 @@ function renderHistory() {
     ui.runHistory.append(node('div', 'history-empty', '暂无执行历史'));
     return;
   }
+  const renderedSessionId = state.session.id;
   for (const record of state.runHistory) {
     const item = node('div', 'history-entry');
     const head = node('div', 'history-head');
@@ -309,6 +345,9 @@ function renderHistory() {
     head.append(node('span', 'history-time', when), node('span', `history-status status-${record.status}`, runStatusText(record.status)));
     item.append(head, node('p', 'history-prompt', record.promptPreview || '历史任务'));
     const details = node('div', 'history-detail', `${record.mode === 'edit' ? '可写' : '受限'} · ${record.workspaceMode === 'worktree' ? 'Git 隔离' : '原项目'}${record.durationMs == null ? '' : ` · ${(record.durationMs / 1000).toFixed(1)}s`}`);
+    if (record.resumeMode && record.resumeMode !== 'new') {
+      details.append(node('span', 'history-resume', record.resumeMode === 'isolated' ? ' · 独立新上下文' : ' · 续接 CLI 会话'));
+    }
     if (record.resumeWarning) {
       details.append(node('span', 'history-resume-warning', ' · CLI continuation failed (cause unconfirmed); you may reset and retry manually'));
     }
@@ -317,8 +356,8 @@ function renderHistory() {
       const button = node('button', 'small-outline history-retry', '重新执行');
       button.title = '显式重新提交原指令；可能重复执行已有副作用';
       button.onclick = async () => {
-        if (!state.session) return;
-        const id = state.session.id;
+        if (state.session?.id !== renderedSessionId) return;
+        const id = renderedSessionId;
         const accepted = window.confirm('重新执行之前失败或中断的任务？先前任务可能已经修改文件，重试可能产生重复副作用。可写任务需要重新授权。');
         if (!accepted) return;
         button.disabled = true;
@@ -337,16 +376,23 @@ function renderHistory() {
   }
 }
 async function loadHistory(append = false) {
+  if (append && historyLoading) return;
+  const ticket = ++historyEpoch;
   const sid = state.session?.id;
   if (!sid) { state.runHistory = []; state.historyTotal = 0; renderHistory(); return; }
+  historyLoading = true;
+  ui.historyMore.disabled = true;
   const offset = append ? state.runHistory.length : 0;
   try {
     const data = await api(`/api/sessions/${sid}/runs?offset=${offset}&limit=20`);
-    if (state.session?.id !== sid) return;
+    if (ticket !== historyEpoch || state.session?.id !== sid) return;
     state.runHistory = append ? [...state.runHistory, ...data.items] : data.items;
     state.historyTotal = data.total;
     renderHistory();
-  } catch (err) { toast(err.message); }
+  } catch (err) { if (ticket === historyEpoch) toast(err.message); }
+  finally {
+    if (ticket === historyEpoch) { historyLoading = false; ui.historyMore.disabled = false; }
+  }
 }
 function renderAll() {
   renderAgents(); renderProjects(); renderSessions(); renderHeader(); renderConversation(); renderAttachments(); renderFiles(); renderPreview(); renderActivity(); renderHistory();
@@ -356,21 +402,28 @@ async function refresh({ bootstrap = false } = {}) {
   state.reloading = true;
   try {
     const previousProject = state.projectId;
+    const selectedAtStart = state.session?.id;
+    const viewAtStart = viewEpoch;
     const data = bootstrap ? await api('/api/bootstrap') : null;
     if (data) {
       state.token = data.token; state.agents = data.agents; state.projects = data.projects; state.sessions = data.sessions;
       state.bootId = data.bootId || state.bootId;
       if (!data.projects.some(p => p.id === state.projectId)) state.projectId = data.projects[0]?.id || null;
     } else state.sessions = await api('/api/sessions');
-    if (state.session) {
+    if (state.session && state.session.id === selectedAtStart && viewEpoch === viewAtStart) {
       const previous = state.session;
-      const current = state.sessions.find(s => s.id === state.session.id);
-      state.session = current ? await api(`/api/sessions/${current.id}`) : null;
-      if (!state.session || previous.status !== state.session.status ||
-          previous.queueLength !== state.session.queueLength ||
-          previous.lastRun?.finishedAt !== state.session.lastRun?.finishedAt) await loadHistory();
+      const current = state.sessions.find(s => s.id === selectedAtStart);
+      const detail = current ? await api(`/api/sessions/${current.id}`) : null;
+      if (viewEpoch !== viewAtStart || state.session?.id !== selectedAtStart) return;
+      state.session = detail;
+      const justFinished = previous.status === 'running' && detail?.status !== 'running';
+      if (!detail || previous.status !== detail.status ||
+          previous.queueLength !== detail.queueLength ||
+          previous.lastRun?.finishedAt !== detail.lastRun?.finishedAt) await loadHistory();
+      if (justFinished) await loadFiles();
     }
-    if (previousProject !== state.projectId) { state.currentDir = '.'; state.preview = null; await loadFiles(); }
+    if (viewEpoch !== viewAtStart) { requestRefresh(bootstrap); return; }
+    if (previousProject !== state.projectId) { state.currentDir = '.'; state.preview = null; previewEpoch++; await loadFiles(); }
     renderAgents(); renderProjects(); renderSessions(); renderHeader(); renderConversation(); renderActivity();
   } catch (err) { toast(err.message); }
   finally { state.reloading = false; }
@@ -393,32 +446,64 @@ function showConnectionStatus(online) {
   }
 }
 async function selectSession(id) {
+  const ticket = ++viewEpoch;
+  rememberDraft();
+  // A slow HTTP response must never leave the previous session writable while
+  // navigation is in progress.
+  state.session = null;
+  state.runHistory = []; state.historyTotal = 0;
+  historyEpoch++;
+  renderHeader(); renderConversation(); renderHistory();
   try {
-    state.session = await api(`/api/sessions/${id}`);
-    state.runHistory = []; state.historyTotal = 0;
-    state.agentId = state.session.agentId;
-    state.projectId = state.session.projectId;
+    const detail = await api(`/api/sessions/${id}`);
+    if (ticket !== viewEpoch) return;
+    state.session = detail;
+    ui.composer.value = sessionDrafts.get(detail.id) || '';
+    state.agentId = detail.agentId;
+    state.projectId = detail.projectId;
     state.attachments = [];
-    state.currentDir = '.'; state.preview = null; state.searchText = ''; ui.search.value = '';
-    await loadFiles();
-    await loadHistory();
+    state.runHistory = []; state.historyTotal = 0;
+    state.currentDir = '.'; state.preview = null; previewEpoch++;
+    state.searchText = ''; ui.search.value = '';
+    ui.mode.value = 'plan'; ui.worktree.checked = false;
+    saveSelection(); closeMobileSidebar();
+    await Promise.all([loadFiles(), loadHistory()]);
+    if (ticket !== viewEpoch) return;
     renderAll();
     ui.conversation.scrollTop = ui.conversation.scrollHeight;
-  } catch (err) { toast(err.message); }
+  } catch (err) { if (ticket === viewEpoch) toast(err.message); }
 }
 async function switchAgent(agentId) {
+  if (!state.agents.some(a => a.id === agentId)) return;
+  rememberDraft();
   state.agentId = agentId;
+  state.session = null;
+  renderHeader(); renderConversation();
   const target = sessionsForCurrent()[0];
   if (target) await selectSession(target.id);
-  else { state.session = null; state.attachments = []; state.runHistory = []; state.historyTotal = 0; renderAll(); }
+  else {
+    viewEpoch++; state.session = null; state.attachments = [];
+    state.runHistory = []; state.historyTotal = 0;
+    historyEpoch++; saveSelection(); renderAll(); closeMobileSidebar();
+  }
 }
 async function switchProject(projectId) {
+  if (!state.projects.some(p => p.id === projectId)) return;
+  const ticket = ++viewEpoch;
+  rememberDraft();
   state.projectId = projectId;
-  state.attachments = []; state.currentDir = '.'; state.preview = null; state.searchText = ''; ui.search.value = '';
+  state.session = null;
+  renderHeader(); renderConversation();
+  state.attachments = []; state.currentDir = '.';
+  state.preview = null; previewEpoch++; state.searchText = ''; ui.search.value = '';
   await loadFiles();
-  const s = sessionsForCurrent()[0];
-  if (s) await selectSession(s.id);
-  else { state.session = null; state.runHistory = []; state.historyTotal = 0; renderAll(); }
+  if (ticket !== viewEpoch) return;
+  const target = sessionsForCurrent()[0];
+  if (target) await selectSession(target.id);
+  else {
+    state.session = null; state.runHistory = []; state.historyTotal = 0;
+    historyEpoch++; saveSelection(); renderAll(); closeMobileSidebar();
+  }
 }
 async function newSession() {
   if (!state.projectId) return toast('请先添加本地项目');
@@ -431,25 +516,38 @@ async function newSession() {
   } catch (err) { toast(err.message); }
 }
 async function loadFiles() {
-  if (!state.projectId) { state.files = []; renderFiles(); return; }
+  const ticket = ++fileEpoch;
+  const snapshot = { projectId: state.projectId, directory: state.currentDir, query: state.searchText };
+  if (!snapshot.projectId) { state.files = []; renderFiles(); return; }
   try {
-    state.files = state.searchText
-      ? await api(`/api/projects/${encodeURIComponent(state.projectId)}/search?q=${encodeURIComponent(state.searchText)}`)
-      : await api(`/api/projects/${encodeURIComponent(state.projectId)}/files?path=${encodeURIComponent(state.currentDir)}`);
+    const files = snapshot.query
+      ? await api(`/api/projects/${encodeURIComponent(snapshot.projectId)}/search?q=${encodeURIComponent(snapshot.query)}`)
+      : await api(`/api/projects/${encodeURIComponent(snapshot.projectId)}/files?path=${encodeURIComponent(snapshot.directory)}`);
+    if (ticket !== fileEpoch || !isCurrentFileView(snapshot, {
+      projectId: state.projectId, directory: state.currentDir, query: state.searchText
+    })) return;
+    state.files = files;
     renderFiles();
-  } catch (err) { state.files = []; renderFiles(); toast(err.message); }
+  } catch (err) {
+    if (ticket !== fileEpoch) return;
+    state.files = []; renderFiles(); toast(err.message);
+  }
 }
 async function openDirectory(relative) {
   state.currentDir = relative || '.';
+  if (state.searchText) { state.searchText = ''; ui.search.value = ''; }
   await loadFiles();
 }
 async function showPreview(relative) {
-  if (!state.projectId) return;
+  const projectId = state.projectId;
+  const ticket = ++previewEpoch;
+  if (!projectId) return;
   try {
-    const result = await api(`/api/projects/${encodeURIComponent(state.projectId)}/preview?path=${encodeURIComponent(relative)}`);
-    state.preview = { ...result, path: relative };
+    const result = await api(`/api/projects/${encodeURIComponent(projectId)}/preview?path=${encodeURIComponent(relative)}`);
+    if (ticket !== previewEpoch || state.projectId !== projectId) return;
+    state.preview = { ...result, path: relative, projectId };
     renderPreview();
-  } catch (err) { toast(err.message); }
+  } catch (err) { if (ticket === previewEpoch) toast(err.message); }
 }
 function attachProjectFile(rel) {
   if (!rel || state.attachments.some(f => f.path === rel)) return;
@@ -459,34 +557,58 @@ function attachProjectFile(rel) {
   ui.composer.focus();
 }
 async function uploadFiles(files) {
-  if (!state.projectId) return toast('请先添加项目');
-  for (const file of files) {
-    if (file.size > 10 * 1024 * 1024) { toast(`${file.name} 超过 10MB，未上传`); continue; }
-    try {
-      const data = await api(`/api/projects/${encodeURIComponent(state.projectId)}/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', data: file, binary: true });
-      if (state.attachments.length >= 12) { toast('已达到 12 个附件的上限'); break; }
-      state.attachments.push(data);
-      renderAttachments();
-    } catch (err) { toast(`上传失败：${err.message}`); }
-  }
+  const projectId = state.projectId;
+  if (!projectId) return toast('Please add a project first');
+  if (uploading) return toast('File upload already in progress');
+  const available = uploadSlots(state.attachments.length, files.length);
+  if (!available) return toast('At most 12 attachments per message');
+  if (available < files.length) toast(`Only ${available} more attachments fit in this message`);
+  uploading = true;
+  let completed = 0;
+  try {
+    for (const file of files.slice(0, available)) {
+      if (state.projectId !== projectId) break;
+      if (file.size > 10 * 1024 * 1024) { toast(`${file.name}: exceeds 10 MB`); continue; }
+      try {
+        const item = await api(`/api/projects/${encodeURIComponent(projectId)}/upload?name=${encodeURIComponent(file.name)}`, {
+          method: 'POST', data: file, binary: true
+        });
+        if (state.projectId !== projectId) { toast('Upload finished in the previous project; attachment not added'); break; }
+        if (state.attachments.length >= 12) break;
+        if (!state.attachments.some(a => a.path === item.path)) state.attachments.push(item);
+        completed++;
+        renderAttachments();
+      } catch (err) { toast(`Upload failed: ${err.message}`); }
+    }
+    if (completed && state.projectId === projectId) await loadFiles();
+  } finally { uploading = false; }
 }
 async function sendMessage() {
-  if (!state.session) return;
-  const text = ui.composer.value.trim();
-  if (!text) return toast('请先输入任务内容');
-  ui.send.disabled = true;
+  if (sending || !state.session || !agent()?.installed) return;
+  const id = state.session.id;
+  const raw = ui.composer.value;
+  const text = raw.trim();
+  if (!text) return toast('Please enter a task');
+  const attachments = state.attachments.map(item => item.path);
+  const mode = ui.mode.value;
+  const workspaceMode = ui.worktree.checked ? 'worktree' : 'project';
+  sending = true;
+  renderHeader();
   try {
-    const data = await api(`/api/sessions/${state.session.id}/messages`, {
-      method: 'POST', data: { text, attachments: state.attachments.map(f => f.path), mode: ui.mode.value, workspaceMode: ui.worktree.checked ? 'worktree' : 'project' }
+    const result = await api(`/api/sessions/${id}/messages`, {
+      method: 'POST', data: { text, attachments, mode, workspaceMode }
     });
-    ui.composer.value = '';
-    state.attachments = [];
-    renderAttachments();
-    await refresh();
-    if (data.queued) toast('指令已加入当前会话执行队列');
-    ui.conversation.scrollTop = ui.conversation.scrollHeight;
+    if (sessionDrafts.get(id) === raw) sessionDrafts.set(id, '');
+    if (state.session?.id === id) {
+      if (ui.composer.value === raw) ui.composer.value = '';
+      state.attachments = state.attachments.filter(item => !attachments.includes(item.path));
+      renderAttachments();
+      await refresh();
+      if (result.queued) toast('Task added to queue');
+      ui.conversation.scrollTop = ui.conversation.scrollHeight;
+    }
   } catch (err) { toast(err.message); }
-  finally { ui.send.disabled = !state.session; }
+  finally { sending = false; renderHeader(); }
 }
 function bindUI() {
   ui.historyMore.onclick = () => void loadHistory(true);
@@ -496,6 +618,7 @@ function bindUI() {
       const checks = await api('/api/agents/diagnostics');
       const details = checks.map(x => `${x.id}: ${x.installed ? x.version || '版本未知' : '未安装'}`).join(' | ');
       toast(details + '（不会检查登录状态）');
+      await refresh({ bootstrap: true });
     } catch (err) { toast(err.message); }
   };
   ui.projectSelect.onchange = () => void switchProject(ui.projectSelect.value);
@@ -515,6 +638,7 @@ function bindUI() {
   });
   ui.mode.onchange = () => { ui.worktree.disabled = ui.mode.value !== 'edit'; if (ui.worktree.disabled) ui.worktree.checked = false; };
   q('#send-message').onclick = () => void sendMessage();
+  ui.composer.addEventListener('input', rememberDraft);
   ui.composer.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void sendMessage(); }
   });
@@ -548,7 +672,16 @@ function bindUI() {
     try { await api(`/api/sessions/${state.session.id}/stop`, { method: 'POST', data: {} }); requestRefresh(); }
     catch (err) { toast(err.message); }
   };
-  q('#toggle-inspector').onclick = () => ui.app.classList.toggle('inspector-hidden');
+  q('#toggle-inspector').onclick = () => {
+    if (window.matchMedia('(max-width:660px)').matches) ui.app.classList.toggle('mobile-inspector-open');
+    else ui.app.classList.toggle('inspector-hidden');
+  };
+  q('#toggle-sidebar').onclick = () => {
+    const open = ui.app.classList.toggle('mobile-sidebar-open');
+    q('#toggle-sidebar').setAttribute('aria-expanded', String(open));
+  };
+  q('#mobile-backdrop').onclick = closeMobileSidebar;
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMobileSidebar(); });
   q('#reload-files').onclick = () => void loadFiles();
   let searchTimer = null;
   ui.search.addEventListener('input', () => {
@@ -568,7 +701,7 @@ function bindUI() {
     const parts = state.currentDir.split(/[\\/]/).filter(Boolean);
     parts.pop(); void openDirectory(parts.join('/') || '.');
   };
-  q('#close-preview').onclick = () => { state.preview = null; renderPreview(); };
+  q('#close-preview').onclick = () => { previewEpoch++; state.preview = null; renderPreview(); };
   q('#attach-preview').onclick = () => state.preview ? attachProjectFile(state.preview.path) : toast('请先选择一个文件');
   q('#reveal-preview').onclick = async () => {
     if (!state.preview) return toast('请先选择一个文件');
@@ -602,17 +735,26 @@ async function main() {
     state.projects = bootstrap.projects;
     state.sessions = bootstrap.sessions;
     state.bootId = bootstrap.bootId || null;
-    state.projectId = state.projects[0]?.id || null;
-    state.agentId = 'demo';
     const sid = new URLSearchParams(location.search).get('session');
-    const target = sid ? state.sessions.find(s => s.id === sid) : sessionsForCurrent()[0];
-    if (target) { state.session = await api(`/api/sessions/${target.id}`); state.projectId = target.projectId; state.agentId = target.agentId; }
-    else if (state.projectId) {
-      state.session = await api('/api/sessions', { method: 'POST', data: { projectId: state.projectId, agentId: 'demo' } });
+    const initial = startupSelection({
+      projects: state.projects, sessions: state.sessions, agents: state.agents,
+      requestedSessionId: sid, saved: readSelection()
+    });
+    state.projectId = initial.projectId;
+    state.agentId = initial.agentId;
+    if (initial.sessionId) {
+      state.session = await api(`/api/sessions/${initial.sessionId}`);
+    } else if (state.projectId && !state.sessions.length) {
+      // Only create a Demo session on an entirely new workspace, never on reload
+      // when another agent already has sessions.
+      state.session = await api('/api/sessions', { method: 'POST', data: {
+        projectId: state.projectId, agentId: 'demo'
+      }});
       state.sessions.unshift(state.session);
+      state.agentId = 'demo';
     }
-    await loadFiles();
-    await loadHistory();
+    saveSelection();
+    await Promise.all([loadFiles(), loadHistory()]);
     renderAll();
     const events = new EventSource('/api/events');
     events.onopen = () => showConnectionStatus(true);
@@ -631,7 +773,7 @@ async function main() {
     events.onerror = () => showConnectionStatus(false);
     setInterval(() => { if (!state.connected) requestRefresh(true); }, 3000);
   } catch (err) {
-    toast(`初始化失败：${err.message}`);
+    toast(`Initialization failed: ${err.message}`);
     console.error(err);
   }
 }

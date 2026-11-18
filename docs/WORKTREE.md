@@ -48,6 +48,6 @@ git -C '/path/to/original/repo' worktree remove '/path/to/your/isolated/worktree
 - 不展开符号链接目标、不渲染二进制内容，也不自动合并、删除、恢复或清理任何文件。
 - 如果显示截断或特殊类型提示，请使用本地 IDE 和 `git diff` 自行完整审查。
 
-## V0.6 text patch export (manual review only)
+## V0.6 optional text patch download
 
-Per changed file, `GET /api/sessions/:sid/workspaces/:id/patch?path=<relative>` can export a complete, bounded, UTF-8 text patch. A download may contain sensitive project content. Symlink, binary, truncated, oversized and unsupported files are not exported. The service does not execute `git apply`, merge or push. Review and apply independently in a trusted Git client.
+Worktree review offers `GET /api/sessions/:sessionId/workspaces/:id/patch?path=<relative>` and a per-file **Export patch** button. The endpoint exports only an existing changed text file with a complete, bounded diff. Binary, symlink, empty new files, oversized/unreadable files, truncated diffs and filenames requiring Git quoting are rejected. A downloaded patch may include sensitive content from the project's files; inspect it before sharing. Patch export never calls `git apply`, merges, pushes, or changes either worktree. For applying changes, use your regular local Git workflow and review each hunk first.

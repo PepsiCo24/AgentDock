@@ -23,3 +23,34 @@ test('history and Git changes use text nodes, never arbitrary HTML injection', (
   assert.doesNotMatch(js, /\.innerHTML\s*=/);
   assert.doesNotMatch(js, /insertAdjacentHTML\s*\(/);
 });
+
+test('V0.6 multi-window status and agent activity timeline have safe UI contracts', () => {
+  assert.match(html, /id="connection-state"/);
+  assert.match(html, /v0\.7/);
+  assert.match(js, /events\.addEventListener\('ready'/);
+  assert.match(js, /requestRefresh\(payload\.scope === 'catalog'\)/);
+  assert.match(js, /session\?\.activity \|\| \[\]/);
+  assert.doesNotMatch(js, /eval\s*\(/);
+});
+
+
+test('CLI reset and patch export are explicit UI actions', () => {
+  assert.match(html, /id="reset-cli-context"/);
+  assert.match(js, /resetRemote\.onclick/);
+  assert.match(js, /expectedRemoteId/);
+  assert.match(js, /workspace-patch-download/);
+  assert.match(js, /\/patch\?path=/);
+});
+
+test('V0.7 navigation, mobile panels and async submission guards are present', () => {
+  assert.match(html, /id="toggle-sidebar"/);
+  assert.match(html, /id="mobile-backdrop"/);
+  assert.match(js, /startupSelection\(/);
+  assert.match(js, /let sending = false/);
+  assert.match(js, /if \(sending \|\| !state\.session/);
+  assert.match(js, /ticket !== viewEpoch/);
+  assert.match(js, /ticket !== fileEpoch/);
+  assert.match(js, /ticket !== previewEpoch/);
+  assert.match(js, /uploadSlots\(/);
+  assert.match(js, /sessionDrafts/);
+});

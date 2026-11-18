@@ -278,3 +278,126 @@ test('Per-file diff API is read-only, bounds file types and rejects unrelated pa
   assert.equal((await fetch(`${route}/diff?path=..%2F..%2Fsecret`)).status, 404);
   assert.equal(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), '# Hello from tests\n');
 });
+
+test('V0.6 bootstrap includes a process identity that changes after restart', async t => {
+  const a = await setup(t);
+  assert.equal(a.bootstrap.version, '0.7.0');
+  assert.match(a.bootstrap.bootId, /^[0-9a-f-]{36}$/);
+  const b = await setup(t);
+  assert.notEqual(a.bootstrap.bootId, b.bootstrap.bootId);
+  const health = await (await fetch(`${a.base}/api/health`)).json();
+  assert.equal(health.version, '0.7.0');
+});
+
+test('SSE announces boot ID and broadcasts session/project catalog mutations across windows', async t => {
+  const { base, bootstrap, post, project } = await setup(t);
+  const controller = new AbortController();
+  const events = await fetch(`${base}/api/events`, { signal: controller.signal });
+  assert.equal(events.status, 200);
+  const reader = events.body.getReader();
+  t.after(() => controller.abort());
+  let text = '';
+  const readUntil = async predicate => {
+    const expire = Date.now() + 2500;
+    while (!predicate(text)) {
+      if (Date.now() > expire) throw new Error('timed out waiting for SSE event');
+      const { done, value } = await reader.read();
+      if (done) throw new Error('SSE stream ended early');
+      text += Buffer.from(value).toString('utf8');
+    }
+  };
+  await readUntil(buffer => buffer.includes('event: ready\n') && buffer.includes(bootstrap.bootId));
+  const created = await post('/api/sessions', { agentId: 'demo', projectId: project.id });
+  assert.equal(created.status, 201);
+  await readUntil(buffer => buffer.includes('"scope":"catalog","action":"session"'));
+  const updated = await fetch(`${base}/api/sessions/${created.json.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-AgentDock-Token': bootstrap.token },
+    body: JSON.stringify({ title: 'Renamed in second window' })
+  });
+  assert.equal(updated.status, 200);
+  await readUntil(buffer => buffer.includes('"scope":"catalog","action":"rename"'));
+  controller.abort();
+});
+
+
+test('remote CLI reset HTTP endpoint rejects stale tokens, stale IDs and active tasks', async t => {
+  const { base, project, post, store, runner } = await setup(t, {
+    spawnImpl: (cmd, args, options) => spawn(process.execPath, [fake, cmd, ...args], options)
+  });
+  const created = await post('/api/sessions', { projectId: project.id, agentId: 'codex' });
+  const sid = created.json.id;
+  const session = store.session(sid);
+  assert.equal((await post(`/api/sessions/${sid}/reset-remote`, { expectedRemoteId: 'old' })).status, 409);
+  await post(`/api/sessions/${sid}/messages`, { text: 'initial' });
+  for (let i = 0; i < 150 && session.status !== 'idle'; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(session.remoteId, 'fake-codex-session');
+  assert.equal((await post(`/api/sessions/${sid}/reset-remote`, { expectedRemoteId: session.remoteId }, 'wrong')).status, 403);
+  assert.equal((await post(`/api/sessions/${sid}/reset-remote`, { expectedRemoteId: 'stale-id' })).status, 409);
+  const prior = session.messages.length;
+  const result = await post(`/api/sessions/${sid}/reset-remote`, { expectedRemoteId: session.remoteId });
+  assert.equal(result.status, 200);
+  assert.equal(result.json.remoteId, null);
+  assert.equal(session.remoteId, null);
+  assert.equal(session.messages.length, prior, 'app history must be preserved');
+  assert.equal((await post(`/api/sessions/${sid}/reset-remote`, { expectedRemoteId: 'fake-codex-session' })).status, 409);
+  session.remoteId = 'restored';
+  await post(`/api/sessions/${sid}/messages`, { text: 'slow task' });
+  for (let i = 0; i < 150 && session.status !== 'running'; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(session.status, 'running');
+  assert.equal((await post(`/api/sessions/${sid}/reset-remote`, { expectedRemoteId: 'restored' })).status, 409);
+  runner.stop(sid);
+});
+
+test('HTTP worktree patch export is text-only, bounded and read-only', async t => {
+  const { base, project, root, store, post } = await setup(t);
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: root });
+  execFileSync('git', ['add', 'README.md'], { cwd: root });
+  execFileSync('git', ['commit', '-q', '-m', 'baseline'], { cwd: root });
+  const created = await post('/api/sessions', { projectId: project.id, agentId: 'demo' });
+  const sid = created.json.id;
+  const { createIsolatedWorktree } = await import('../src/worktrees.mjs');
+  const workspace = createIsolatedWorktree({ projectRoot: root, dataDir: store.dir, jobId: 'd9416c5c-2fd3-4d53-9109-2e8e95d9dc5b' });
+  const session = store.session(sid);
+  session.workspaces.push(workspace);
+  store.save();
+  fs.writeFileSync(path.join(workspace.path, 'new.txt'), 'hello\n');
+  const url = `${base}/api/sessions/${sid}/workspaces/${workspace.id}/patch?path=new.txt`;
+  const res = await fetch(url);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-disposition'), /attachment/);
+  assert.match(res.headers.get('content-type'), /text\/x-diff/);
+  const content = await res.text();
+  assert.match(content, /new file mode 100644/);
+  assert.equal(fs.existsSync(path.join(root, 'new.txt')), false);
+  const invalid = await fetch(`${base}/api/sessions/${sid}/workspaces/${workspace.id}/patch?path=..%2F..%2Fpasswd`);
+  assert.ok([403, 404].includes(invalid.status));
+  fs.writeFileSync(path.join(workspace.path, 'raw.bin'), Buffer.from([0, 1]));
+  assert.equal((await fetch(`${base}/api/sessions/${sid}/workspaces/${workspace.id}/patch?path=raw.bin`)).status, 422);
+});
+
+test('UI helper module is served from same-origin for frontend imports', async t => {
+  const { base } = await setup(t);
+  const r = await fetch(`${base}/ui-state.mjs`);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /^text\/javascript/);
+  assert.match(await r.text(), /function startupSelection/);
+  assert.equal((await fetch(`${base}/ui-state.mjs/extra`)).status, 404);
+});
+
+test('disconnected SSE clients release their server-side change listener', async t => {
+  const { base, runner } = await setup(t);
+  const start = runner.listenerCount('change');
+  const controller = new AbortController();
+  const response = await fetch(`${base}/api/events`, { signal: controller.signal });
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  await reader.read();
+  assert.equal(runner.listenerCount('change'), start + 1);
+  controller.abort();
+  for (let i = 0; i < 70 && runner.listenerCount('change') !== start; i++) {
+    await new Promise(resolve => setTimeout(resolve, 15));
+  }
+  assert.equal(runner.listenerCount('change'), start);
+});

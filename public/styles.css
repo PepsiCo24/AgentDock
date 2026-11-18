@@ -15,9 +15,6 @@
 .workspace-patch-download { font-size: 10px; padding: 4px 7px; }
 .history-resume-warning { color: #e6ae88; }
 #reset-cli-context:disabled { opacity: .35; cursor: not-allowed; }
-.connection-state{font-size:10px;color:#9fceb0;padding:7px 8px;border:1px solid #355a49;border-radius:16px;white-space:nowrap}
-.connection-state.connection-offline{color:#e5b481;border-color:#6c5137}
-@media(max-width:880px){.connection-state{display:none}}
 .workspace-changes { white-space: pre-wrap; font-size: 11px; max-height: 190px; overflow: auto; }
 
 #diagnose-agents { font-size: 11px; margin-right: 5px; }
@@ -43,3 +40,18 @@
 .history-empty{font-size:11px;color:#8393a8;padding:9px 2px}
 #history-more{margin-top:9px;width:100%}
 @media(max-width:660px){.history-section{max-height:165px}.file-diff{max-height:130px}}
+
+/* V0.5: connection and sanitized execution timeline */
+.connection-state{font-size:10px;color:#9fceb0;padding:7px 8px;border:1px solid #355a49;border-radius:16px;white-space:nowrap}.connection-state.connection-offline{color:#e5b481;border-color:#6c5137}.activity-marker{width:15px;flex-shrink:0;text-align:center;font-weight:850;color:#8ea9f3}.activity-tool .activity-marker{color:#e3b783}.activity-error .activity-marker{color:#f09b92}.activity-result .activity-marker{color:#8bd2a7}.activity-session .activity-marker{color:#c1acf4}.history-resume{color:#8da8e5}@media(max-width:880px){.connection-state{display:none}}
+
+/* V0.7: mobile navigation and reliable small-screen inspector visibility. */
+.mobile-menu-button{display:none}
+.mobile-backdrop{display:none}
+@media(max-width:660px){
+  .mobile-menu-button{display:grid}
+  .app .inspector{display:none}
+  .app.mobile-inspector-open .inspector{display:flex;z-index:22}
+  .app.mobile-sidebar-open .sidebar{display:flex;position:fixed;left:56px;top:0;bottom:0;width:min(310px,calc(100vw - 56px));z-index:24;box-shadow:16px 0 36px #0009}
+  .app.mobile-sidebar-open .mobile-backdrop{display:block;position:fixed;inset:0;background:#0008;border:0;z-index:23}
+  .app.mobile-sidebar-open .inspector{display:none}
+}

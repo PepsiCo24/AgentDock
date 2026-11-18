@@ -1,5 +1,9 @@
 import { TextDecoder } from 'node:util';
-/** UTF-8-safe bounded JSONL parser. Never echoes raw failed input. */
+
+/**
+ * UTF-8-safe, bounded newline-delimited JSON decoder for CLI stdout.
+ * Never logs raw malformed lines: they may contain file contents or secrets.
+ */
 export class NdjsonDecoder {
   constructor(onValue, { maxLineBytes = 1024 * 1024 } = {}) {
     this.onValue = onValue;
@@ -23,13 +27,19 @@ export class NdjsonDecoder {
   }
   parse(line) {
     if (!line.trim()) return;
-    if (Buffer.byteLength(line, 'utf8') > this.maxLineBytes) throw new Error('Agent 单条输出超过安全限制');
+    if (Buffer.byteLength(line, 'utf8') > this.maxLineBytes) {
+      throw new Error('Agent 单条输出超过安全限制');
+    }
     try {
       const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { this.malformed++; return; }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        this.malformed++;
+        return;
+      }
       this.valid++;
       this.onValue(parsed);
     } catch (err) {
+      // A parsing error is an unsupported CLI event, not a reason to show the line.
       if (err instanceof SyntaxError) this.malformed++;
       else throw err;
     }

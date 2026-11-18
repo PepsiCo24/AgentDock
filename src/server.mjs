@@ -11,11 +11,12 @@ import { worktreeChanges, worktreeFileDiff, worktreeFilePatch } from './worktree
 const here = path.dirname(fileURLToPath(import.meta.url));
 const staticDir = path.resolve(here, '../public');
 const sampleRoot = path.resolve(here, '../examples/sample-project');
+const APP_VERSION = '0.7.0';
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 700 * 1024;
 const MAX_DOWNLOAD_BYTES = 30 * 1024 * 1024;
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
 const safeMedia = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
 function json(res, status, data, headers = {}) {
@@ -133,17 +134,18 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
         throw new InputError('缺少本地会话安全令牌', 403);
       }
       if (req.method === 'GET' && pathname === '/api/bootstrap') {
-        return json(res, 200, { token, agents: installedAgents(), projects: store.projects(), sessions: store.sessions(), bootId, version: '0.6.0' });
+        return json(res, 200, { token, agents: installedAgents(), projects: store.projects(), sessions: store.sessions(), bootId, version: APP_VERSION });
       }
       if (req.method === 'GET' && pathname === '/api/agents/diagnostics') return json(res, 200, agentDiagnostics());
-      if (req.method === 'GET' && pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.6.0' });
+      if (req.method === 'GET' && pathname === '/api/health') return json(res, 200, { status: 'ok', version: APP_VERSION });
       if (req.method === 'GET' && pathname === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.write(`event: ready\ndata: ${JSON.stringify({ bootId })}\n\n`);
         const listener = event => { if (!res.writableEnded) res.write(`event: change\ndata: ${JSON.stringify(event)}\n\n`); };
         runner.on('change', listener);
         const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 25000);
-        req.on('close', () => { runner.off('change', listener); clearInterval(heartbeat); });
+        res.on('close', () => { runner.off('change', listener); clearInterval(heartbeat); });
+        heartbeat.unref?.();
         return;
       }
       if (req.method === 'POST' && pathname === '/api/projects') {
@@ -267,7 +269,7 @@ export function createApp({ dataDir, demoDelay, spawnImpl } = {}) {
           return json(res, 200, { opened: true });
         }
       }
-      if (req.method === 'GET' && (pathname === '/' || ['/app.js', '/styles.css', '/favicon.svg'].includes(pathname))) {
+      if (req.method === 'GET' && (pathname === '/' || ['/app.js', '/ui-state.mjs', '/styles.css', '/favicon.svg'].includes(pathname))) {
         const file = path.join(staticDir, pathname === '/' ? 'index.html' : pathname.slice(1));
         const mime = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
         res.writeHead(200, { 'Content-Type': `${mime}; charset=utf-8`, 'Cache-Control': 'no-store' });
@@ -290,7 +292,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be 1..65535');
   const { server } = createApp();
   server.listen(port, '127.0.0.1', () => {
-    console.log(`AgentDock V0.4 is ready: http://127.0.0.1:${port}`);
+    console.log(`AgentDock V${APP_VERSION} is ready: http://127.0.0.1:${port}`);
     console.log('Local-only mode. Remote access is disabled by default.');
   });
 }

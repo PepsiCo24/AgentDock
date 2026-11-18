@@ -9,6 +9,10 @@ const prompt = agent === 'codex' ? await new Promise(resolve => {
   process.stdin.on('end', () => resolve(text));
 }) : args.join(' ');
 const send = data => process.stdout.write(`${JSON.stringify(data)}\n`);
+if (prompt.includes('invalid-json')) {
+  process.stdout.write('VERY_PRIVATE_COMMAND plain unstructured output\n');
+  process.exit(0);
+}
 const slow = prompt.includes('slow');
 const fail = prompt.includes('fail');
 if (agent === 'codex') {
@@ -19,7 +23,17 @@ if (agent === 'codex') {
 } else if (agent === 'claude') {
   send({ type: 'system', subtype: 'init', session_id: 'fake-claude-session' });
   send({ type: 'assistant', session_id: 'fake-claude-session', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'PRIVATE_TOKEN_SHOULD_NOT_LEAK' } }] } });
-  if (!slow) send({ type: 'result', session_id: 'fake-claude-session', result: 'Claude simulated answer', is_error: fail, usage: { input_tokens: 40, output_tokens: 20 } });
+  if (!slow && !prompt.includes('init-only')) {
+    if (prompt.includes('partial-stream')) {
+      const jsonline = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Claude partial 你好🙂 complete' } } }) + '\n';
+      const bytes = Buffer.from(jsonline, 'utf8');
+      const center = Math.max(1, bytes.indexOf(Buffer.from('你')) + 2);
+      process.stdout.write(bytes.subarray(0, center));
+      process.stdout.write(bytes.subarray(center));
+      send({ type: 'assistant', message: { content: [{ type: 'tool_use', input: { command: 'VERY_PRIVATE_COMMAND' } }, { type: 'text', text: 'Claude partial 你好🙂 complete' }] } });
+      send({ type: 'result', session_id: 'fake-claude-session', result: 'Claude partial 你好🙂 complete', is_error: false, usage: { input_tokens: 40, output_tokens: 20 } });
+    } else send({ type: 'result', session_id: 'fake-claude-session', result: 'Claude simulated answer', is_error: fail, usage: { input_tokens: 40, output_tokens: 20 } });
+  }
 } else if (agent === 'agy') {
   send({ event: 'init', conversation_id: 'fake-agy-session' });
   send({ event: 'step_update', step_update: { step_type: 'run_command', state: 'DONE', input: 'PRIVATE_TOKEN_SHOULD_NOT_LEAK' } });

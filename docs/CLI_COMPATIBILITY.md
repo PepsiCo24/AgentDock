@@ -1,6 +1,6 @@
 # CLI 兼容性与真机验收清单
 
-2026-11-17 · AgentDock 0.3.0
+2026-11-17 · AgentDock 0.5.0
 
 AgentDock 通过非交互 CLI 进程运行用户现有的 AI 编程工具。`npm test` 使用受控的 NDJSON 模拟 CLI，并不构成**已登录厂商 CLI**的真实验收。
 
@@ -30,8 +30,21 @@ npm start
 - [Claude Code CLI 参考](https://code.claude.com/docs/en/cli-reference)
 - [Antigravity CLI 参考](https://antigravity.google/docs/cli/reference/)
 
-## V0.6 version diagnostics and recovery boundary
+## V0.5 已做的协议层改进
 
-`npm run diagnose -- --json` emits a safe local metadata summary (platform, architecture, Node version and CLI version), not a credentials or authentication audit. CLI install and version do **not** imply end-to-end compatibility.
+- `codex exec --json ... resume <session-id> -`：使用上一轮收到的 `thread.started.thread_id`；任务必须收到 `turn.completed` 才判为协议完成。
+- `claude -p --verbose --output-format stream-json --include-partial-messages ... --resume <session-id>`：使用 `session_id` 续接，只收集 `text_delta` 和顶层 `result`；不展示 raw `tool_use.input` 或 `stderr`。
+- `agy -p ... --output-format stream-json ... --conversation <session-id>`：使用 `conversation_id`，根据最终 `result.status` 判断成功或失败；`cache_read_tokens` 可作为实际用量字段。
+- 三种 CLI 的返回事件以模拟 fixture 做自动测试，**不是**厂商账号现场验收。CLI 输出若缺少可识别终结事件会标记为失败并提供本地排查提示。
+- CLI 非交互调用的授权模式不等于进程沙箱；未经严格验证的插件、Hook、MCP 工具仍可能执行副作用，强烈建议仅对可信仓库授权并优先使用 worktree。
 
-After a resumed run fails, inspect changes and manually choose the reset control if needed. It clears only AgentDock's stored remote CLI continuation ID. Local chat and run history remain; no failed job is automatically replayed. Running, queued and awaiting-approval tasks block reset.
+来源：
+- [Codex CLI 官方命令参数](https://learn.chatgpt.com/docs/cli/reference)
+- [Claude Code 官方 CLI 参数](https://code.claude.com/docs/en/cli-reference)
+- [Antigravity 官方 headless 说明](https://antigravity.google/docs/cli/headless/)
+
+## V0.6 local version report and manual resume reset
+
+`npm run diagnose -- --json` prints a JSON metadata report with platform, architecture, Node.js and CLI `--version` summaries. It intentionally does **not** check authentication, list credentials, inspect environment variables or run a task. Treat all installed vendor CLI compatibility as `not-verified` until tested on the target system.
+
+If a resumed task fails, AgentDock records `resumeWarning` but cannot infer whether the remote ID caused the failure. Users may explicitly disconnect CLI continuation using the header reset control after all running, queued and pending tasks finish. Local AgentDock history remains, and the next task starts a fresh remote conversation. This is not an automatic replay or a guarantee that official desktop app history will be available.

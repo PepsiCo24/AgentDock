@@ -2,11 +2,20 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.6 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.7 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
 > 这是独立实现的原型，不是原版 Agent Frontdesk 的镜像或 fork。**不保证**与官方桌面 App 的历史会话共享、逐工具实时审批或任务执行中真正插话。不同 CLI 权限模式的限制也不等同于容器隔离。
+
+## V0.7 UX / backend fixes
+
+- Switching agent/project/session now prevents stale HTTP responses from replacing the current view. Drafts remain separate between sessions within a browser tab.
+- Send actions are locked until the request completes; uploads enforce the 12-attachment limit **before** creating copies, and a project switch cannot attach files to the wrong project.
+- Existing session selection is restored on reload; an extra Demo session is only created when no sessions exist. The CLI diagnosis button now refreshes the availability list.
+- Mobile navigation exposes project/session sidebar and file inspector; concurrent editable tasks request approval without waiting for all execution slots to become free.
+- High-frequency CLI updates are coalesced to avoid a disk write per token; latest results and execution history are persisted on completion.
+- This does **not** claim a live click-through of the user's macOS browser or real authenticated vendor CLI E2E. See [V0.7 QA notes](docs/QA_V0.7.md).
 
 ## 1. 本地启动
 
@@ -15,6 +24,7 @@ AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立
 npm run check
 npm test
 npm run diagnose
+npm run diagnose -- --json # optional structured version report
 npm start
 ```
 
@@ -40,13 +50,16 @@ agy --version
 
 参考官方说明：[Codex CLI](https://learn.chatgpt.com/docs/cli/reference)、[Claude Code CLI](https://code.claude.com/docs/en/cli-reference)、[Antigravity CLI](https://antigravity.google/docs/cli/headless/)。
 
-## 3. V0.6 功能与状态
+## 3. V0.7 功能与状态
 
 | 功能 | 说明 |
 | --- | --- |
-| 多窗口同步 | SSE 目录广播与服务进程 `bootId` 检查；重启后重获本地写入令牌，断线按快照重连 | 
-| CLI 会话续接 | 对 Codex、Claude、Antigravity 续接参数与会话 ID 做校验，记录上下文来源；不代表已与官方桌面 App 同步 | 
-| CLI 流式事件 | 使用有大小限制的 UTF-8 NDJSON 解析，支持 Claude 文本增量事件、要求终结事件，工具输入和命令参数不返回 UI | 
+| 多窗口同步 | SSE 目录广播与服务进程 `bootId` 检查；重启后重获本地写入令牌；断线按快照重连，非原生桌面窗口 |
+| CLI reset / recovery | Failed resumed tasks are never automatically re-run; one explicit reset disconnects only the CLI continuation ID, retaining local messages. Reset is blocked for running/queued/pending-approval tasks and stale windows. |
+| Worktree patch export | Download complete, size-limited text-only `.patch` for individual changed files; export never applies or merges changes. Refuses binary, symlinks, oversized and unsupported filenames. |
+| CLI compatibility report | `npm run diagnose -- --json` records OS/Node and CLI version metadata without checking login or credentials; real vendor compatibility remains unverified. |
+| CLI 会话续接 | 对 Codex、Claude、Antigravity 续接参数及会话 ID 加校验，并记录每次任务的上下文来源；不代表已与官方桌面 App 同步 |
+| CLI 流式事件 | 使用有大小限制的 UTF-8 NDJSON 解析，支持 Claude 文本增量事件、要求完整终结事件，工具输入与命令参数不返回 UI |
 | 多 Agent / 项目 / 会话 | Agent、项目和会话独立管理；全局默认最多 3 个同时执行的任务，超出的排队 |
 | Git worktree 隔离写入 | 可写任务可选从 Git HEAD 新建独立 worktree；完成后可查看路径、变更和打开文件管理器，**不自动合并** |
 | 逐文件差异审查 | 在 Git 隔离工作区点击变更文件即可查看**只读且有上限**的文本差异；不显示符号链接目标文件内容、二进制及大型未跟踪文件；不自动应用改动 |
@@ -80,6 +93,7 @@ docs/DEVELOPMENT_PLAN.md 路线图与验收边界
 docs/WORKTREE.md        worktree 的安全边界与手动回收
 docs/RUN_HISTORY.md     历史持久化、重试和 HTTP 接口说明
 docs/CLI_COMPATIBILITY.md CLI 真实环境验收矩阵
+docs/RESUME_RECOVERY.md Explicit CLI reset and patch-export safety
 docs/MULTI_WINDOW.md    SSE 跨窗口同步和重启边界
 scripts/diagnose.mjs    非认证式 CLI 版本诊断
 .github/workflows/ci.yml Node 20 / Node 22 CI
@@ -106,13 +120,4 @@ npm run dev
 - **待真机验收**：在 macOS、Windows、Linux 安装对应 CLI 后对每个适配器分别跑真实任务；核查不同版本 `resume` 参数、权限模式和远端 ID。
 - **后续**：如官方协议支持，再开发逐工具审批和真正的执行中插话；研究与官方 App 共享/导入会话；从官方允许的接口获取额度；可选 Tauri 原生多窗口打包。
 
-开发计划见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)。隔离工作区详细说明见 [docs/WORKTREE.md](docs/WORKTREE.md)，执行历史与安全重试见 [docs/RUN_HISTORY.md](docs/RUN_HISTORY.md)，厂商 CLI 的真实验收清单见 [docs/CLI_COMPATIBILITY.md](docs/CLI_COMPATIBILITY.md)。
-
-## V0.6 Recovery and patch review
-
-- **Reset CLI continuation**: only an explicit header action disconnects the last remote CLI ID while preserving local AgentDock messages and run history. Running, queued and pending-approval tasks block reset; stale windows get HTTP 409.
-- **Failed resumed tasks**: are never silently replayed or automatically reset. Inspect changes before manually retrying; a failed resumed call may have executed partial edits.
-- **Export patch**: download a size-bounded single-file text diff from Git worktree review. Binary, symlink and unsafe/truncated/unsupported files are refused. The patch is never applied or merged automatically.
-- **Diagnostics**: `npm run diagnose -- --json` prints OS/Node and CLI version metadata, without verifying login or real compatibility.
-
-See [docs/RESUME_RECOVERY.md](docs/RESUME_RECOVERY.md) and [docs/WORKTREE.md](docs/WORKTREE.md). Verified via mock CLI/HTTP/real-local-Git tests; authentic vendor CLI end-to-end and desktop-app sync remain unverified.
+开发计划见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)。隔离工作区详细说明见 [docs/WORKTREE.md](docs/WORKTREE.md)，执行历史与安全重试见 [docs/RUN_HISTORY.md](docs/RUN_HISTORY.md)，厂商 CLI 的真实验收清单见 [docs/CLI_COMPATIBILITY.md](docs/CLI_COMPATIBILITY.md)，多窗口同步见 [docs/MULTI_WINDOW.md](docs/MULTI_WINDOW.md)。

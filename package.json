@@ -1,7 +1,7 @@
 {
   "name": "agentdock-local",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Local-first multi-Agent workbench for Codex, Claude Code and Antigravity CLI",
   "type": "module",
   "engines": {
@@ -12,6 +12,6 @@
     "dev": "node --watch src/server.mjs",
     "test": "node --test test/*.test.mjs",
     "diagnose": "node scripts/diagnose.mjs",
-    "check": "node --check src/core.mjs && node --check src/agents.mjs && node --check src/ndjson.mjs && node --check src/worktrees.mjs && node --check src/server.mjs && node --check public/app.js"
+    "check": "node --check src/core.mjs && node --check src/agents.mjs && node --check src/ndjson.mjs && node --check src/worktrees.mjs && node --check src/server.mjs && node --check public/app.js && node --check public/ui-state.mjs"
   }
 }

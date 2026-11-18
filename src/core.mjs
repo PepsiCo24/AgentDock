@@ -214,12 +214,12 @@ export class Store {
     const hidden = new Set(['.git', 'node_modules', '.agentdock', '.next', 'dist']);
     return fs.readdirSync(dir, { withFileTypes: true })
       .filter(e => !hidden.has(e.name) && !e.isSymbolicLink())
-      .slice(0, 300)
       .map(e => {
         const filePath = path.join(dir, e.name);
         return { name: e.name, path: path.relative(root, filePath), type: e.isDirectory() ? 'dir' : 'file' };
       })
-      .sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name, 'zh') : a.type === 'dir' ? -1 : 1);
+      .sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name, 'zh') : a.type === 'dir' ? -1 : 1)
+      .slice(0, 300);
   }
   searchFiles(projectId, query, limit = 100) {
     const root = fs.realpathSync(this.project(projectId).path);

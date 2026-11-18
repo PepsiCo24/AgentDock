@@ -107,10 +107,11 @@ test('startup invalidates queued, running and awaiting approval history without 
   const a = runner.send(s.id, 'run long');
   const b = runner.send(s2.id, 'queued long');
   const c = runner.send(s3.id, 'approval pending', [], 'edit');
-  // With concurrency limit reached, approval is still queued and not granted.
+  // Editable jobs request explicit approval even while all CLI slots are busy.
   assert.equal(s.status, 'running');
   assert.equal(s2.status, 'queued');
-  assert.equal(s3.status, 'queued');
+  assert.equal(s3.status, 'awaiting_approval');
+  assert.equal(s3.pendingApproval.id, c.jobId);
   const resumed = new Store({ dataDir });
   for (const [sessionId, jobId] of [[s.id, a.jobId], [s2.id, b.jobId], [s3.id, c.jobId]]) {
     assert.equal(resumed.session(sessionId).status, 'interrupted');
@@ -161,4 +162,22 @@ test('explicit retry after restart creates a new task, never revives stale appro
   assert.throws(() => second.approve(s.id, a.jobId), InputError);
   second.reject(s.id, b.jobId);
   runner.stop(s.id);
+});
+
+test('editable work requests approval before a busy global CLI slot becomes available', async t => {
+  const { store, p, s, runner } = setup(t, 'demo', 1);
+  const other = store.addSession({ projectId: p.id, agentId: 'demo' });
+  const busy = runner.send(s.id, 'long read');
+  assert.equal(s.status, 'running');
+  const edit = runner.send(other.id, 'write in later slot', [], 'edit');
+  assert.equal(other.status, 'awaiting_approval');
+  assert.equal(other.pendingApproval.id, edit.jobId);
+  assert.equal(runner.active.size, 1);
+  const approval = runner.approve(other.id, edit.jobId);
+  assert.equal(approval.queued, true);
+  assert.equal(other.status, 'queued');
+  await until(() => store.runs(s.id).items[0].status === 'completed');
+  await until(() => store.runs(other.id).items[0].status === 'completed');
+  assert.equal(store.runs(other.id).items[0].approvedAt !== null, true);
+  assert.equal(store.runs(s.id).items[0].id, busy.jobId);
 });

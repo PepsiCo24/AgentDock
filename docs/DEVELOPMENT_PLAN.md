@@ -1,6 +1,13 @@
+## V0.5 已实现：CLI 兼容性增强与多窗口状态同步
+
+- UTF-8 安全的流式 NDJSON 解码、Claude text_delta、终结事件校验与协议异常检测。
+- 会话恢复参数验证、上下文续接来源记录、隐私保护的工具活动提示。
+- SSE 广播目录改变、`bootId` 服务重启检测与写入令牌刷新。
+- 待实现：真实厂商 CLI 带账号验收、逐工具审批、原生桌面同步和系统级跨窗口拖拽。
+
 # AgentDock 开发路线图
 
-2026-11-18 · V0.6 原型开发
+2026-11-18 · V0.7 原型开发
 
 ## 产品边界
 
@@ -13,8 +20,10 @@
 | **V0.3** | 可选 Git worktree 隔离写入；全局并发上限及排队；CLI 存在/版本诊断；真实 Git 测试和工作区变更审查 | **本地实现及测试完成**；真实 CLI 尚未验收 |
 | V0.3.1 | 在真实 CLI 环境跑版本矩阵、权限/会话恢复和桌面文件操作；修复适配差异 | 待实施，需要真实登录 CLI 设备 |
 | **V0.4** | 执行历史持久化、故障/重启中断标记、人工重试并重审可写授权、逐文件 Git 差异预览 | 本地实现/模拟自动化测试完成；真机 UI 待验收 |
-| **V0.5** | CLI 会话 ID/命令适配、增量 NDJSON 与终结事件校验、SSE 多窗口同步、重启令牌刷新 | 模拟协议及本地集成测试完成；真实厂商登录 CLI 尚未验收 |
-| **V0.6** | 真实 CLI 版本兼容矩阵、系统级隔离评估、桌面打包可行性 | 待实施 |
+| **V0.5** | CLI 会话 ID/命令适配、增量 NDJSON 与终结事件校验、SSE 多窗口同步、重启令牌刷新 | **模拟协议及本地集成测试已完成**；真实登录 CLI、官方 App 会话接续尚未验收 |
+| **V0.6** | Explicit remote CLI reset; failed-resume advisory; bounded, manual text patch export; structured version diagnostics | Implemented and locally tested; real vendor CLI/desktop acceptance still pending |
+| **V0.7** | Fix frontend async navigation, duplicate submits, attachment caps, mobile navigation, progress-write load and edit approval slot ordering | Implemented; 89 local tests passed, device browser QA pending |
+| V0.8 (planned) | Authenticated vendor CLI compatibility matrix on macOS/Windows/Linux, OS sandbox evaluation and native desktop feasibility | Not yet implemented |
 
 ## V0.2 授权流程
 
@@ -76,7 +85,3 @@ npm test
 - 用户仅可显式重试失败/中断任务，且可写任务需要重新批准；历史为每会话最多 150 条元数据，复用原消息作为重试输入。
 - 每个 Git 变更文件通过只读 diff 端点检查；不执行自动应用、合并或删除。
 - 详细机制见 `docs/RUN_HISTORY.md`。
-
-## V0.6 implementation notes
-
-Implemented explicit, task-safe remote CLI reset and manual failure recovery; a stale identifier is rejected and no task is automatically re-run. Export read-only, bounded text-only Git patches for review. Add JSON `--version` diagnostics and restore multi-window SSE bootId/catalog handling in the published frontend. Authenticated vendor CLI acceptance and OS-native isolation remain future work.
