@@ -385,3 +385,25 @@ dialog input { background: var(--ui-control); color: var(--ui-fg); border-color:
   .agent-button.selected, .session-item.active, .welcome-action, .send-button { border: 1px solid Highlight; }
   .session-search:focus-within, .composer-shell:focus-within { border: 2px solid Highlight; }
 }
+
+
+/* V0.12: stable keyboard navigation and explicit file feedback. */
+.session-search-clear {
+  border: 0; padding: 0; min-width: 24px; min-height: 26px;
+  display: inline-grid; place-items: center; border-radius: 6px;
+  background: transparent; color: var(--ui-secondary); font-size: 18px;
+  flex: none; cursor: pointer;
+}
+.session-search-clear:hover { color: var(--ui-fg); background: var(--ui-hover); }
+.session-search-clear:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
+.session-search:has(.session-search-clear:not([hidden])) kbd { display: none; }
+.file-count {
+  margin-inline-start: 7px; color: var(--ui-tertiary);
+  font-size: 11px; font-weight: 500; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.preview-content .preview-error { color: var(--ui-danger); margin: 16px 12px 9px; line-height: 1.55; overflow-wrap: anywhere; }
+.preview-content .preview-error + button { margin: 0 12px 14px; padding: 8px 12px; }
+@media (pointer: coarse) {
+  .session-search-clear { min-width: 42px; min-height: 42px; }
+}

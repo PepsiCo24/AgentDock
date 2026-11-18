@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.11 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.12 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
@@ -145,3 +145,8 @@ The new UI uses the community [apple-ui-design](https://github.com/629611312/app
 - Project data, CLI orchestration and API routes are unchanged apart from adding static UI assets and the version number.
 
 Read [docs/APPLE_UI_REVIEW.md](docs/APPLE_UI_REVIEW.md) for the design audit and acceptance limits.
+
+
+## V0.12 — navigation and file review reliability
+
+AgentDock now keeps existing Agent buttons, the project picker, and session rows in place across live updates when IDs and order are unchanged, preserving keyboard focus. Session search supports ⌘/Ctrl+K to focus, ArrowDown and Enter to open matches, Esc to clear, and a visible clear button. Switching projects or Agents clears the scoped query. File browsing reports loading and item count; preview errors appear inline with explicit retry, and file actions stay disabled until a preview succeeds. These changes do not migrate or delete stored user data. Authenticated vendor CLI E2E checks remain pending on the owner's computer.

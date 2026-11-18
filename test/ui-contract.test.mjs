@@ -95,3 +95,19 @@ test('V0.11 HIG-inspired UI exposes searchable sidebar and theme choices', () =>
   assert.match(css, /forced-colors: active/);
   assert.doesNotMatch(css, /fonts\.googleapis|sf-symbols|apple-logo/i);
 });
+
+
+test('V0.12 preserves live navigation DOM and gives search/file controls keyboard feedback', () => {
+  assert.match(js, /function updateSessionButton\(/);
+  assert.match(js, /sameIdOrder\(/);
+  assert.match(js, /if \(same\) \{/);
+  assert.match(js, /if \(ui\.avatar\.dataset\.agent !==/);
+  assert.match(js, /sessionSearch\.addEventListener\('keydown'/);
+  assert.match(js, /ui\.sessions\.addEventListener\('keydown'/);
+  assert.match(js, /ui\.clearSessionSearch\.onclick/);
+  assert.match(js, /fileLoading/);
+  assert.match(js, /retry\.onclick = \(\) => void showPreview/);
+  assert.match(html, /id="clear-session-search"/);
+  assert.match(html, /id="file-count"/);
+  assert.match(html, /aria-controls="session-list"/);
+});

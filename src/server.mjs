@@ -11,7 +11,7 @@ import { worktreeChanges, worktreeFileDiff, worktreeFilePatch } from './worktree
 const here = path.dirname(fileURLToPath(import.meta.url));
 const staticDir = path.resolve(here, '../public');
 const sampleRoot = path.resolve(here, '../examples/sample-project');
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.12.0';
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 700 * 1024;

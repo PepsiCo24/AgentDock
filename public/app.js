@@ -1,13 +1,13 @@
-import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag } from './ui-state.mjs';
+import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag, sameIdOrder } from './ui-state.mjs';
 import { normalizeAppearance, resolveAppearance, filterSessions } from './appearance.mjs';
 const q = selector => document.querySelector(selector);
 const ui = {
   app: q('#app'), agents: q('#agent-tabs'), projectSelect: q('#project-select'), projectPath: q('#project-path'),
-  sessions: q('#session-list'), sessionSearch: q('#session-search'), sessionCount: q('#session-count'),
+  sessions: q('#session-list'), sessionSearch: q('#session-search'), sessionCount: q('#session-count'), clearSessionSearch: q('#clear-session-search'),
   appearance: q('#appearance-select'), avatar: q('#header-avatar'), title: q('#header-title'),
   subtitle: q('#header-subtitle'), conversation: q('#conversation'), composer: q('#composer'),
   chips: q('#attachment-chips'), queue: q('#queue-indicator'), stop: q('#stop-task'), send: q('#send-message'),
-  fileList: q('#file-list'), currentDir: q('#current-dir'), previewTitle: q('#preview-title'),
+  fileList: q('#file-list'), fileCount: q('#file-count'), currentDir: q('#current-dir'), previewTitle: q('#preview-title'),
   previewContent: q('#preview-content'), inspector: q('#inspector'), dialog: q('#project-dialog'),
   toast: q('#toast'), uploadInput: q('#upload-input'),
   approvalPanel: q('#approval-panel'), approvalSummary: q('#approval-summary'), mode: q('#execution-mode'),
@@ -16,7 +16,7 @@ const ui = {
 };
 const state = {
   token: '', agents: [], projects: [], sessions: [], session: null, agentId: 'demo', projectId: null,
-  currentDir: '.', files: [], attachments: [], preview: null, connected: false, reloading: false, searchText: '',
+  currentDir: '.', files: [], fileLoading: false, attachments: [], preview: null, connected: false, reloading: false, searchText: '',
   runHistory: [], historyTotal: 0, bootId: null
 };
 let refreshTimer = null;
@@ -141,63 +141,109 @@ function statusText(session) {
   return `${labels[session.status] || session.status}${session.queueLength ? ` · 排队 ${session.queueLength}` : ''}`;
 }
 function renderAgents() {
-  clear(ui.agents);
-  for (const a of state.agents) {
-    const btn = node('button', `agent-button${a.id === state.agentId ? ' selected' : ''}${a.installed ? '' : ' disabled'}`);
-    btn.title = a.installed ? a.description : `${a.description}（未检测到 CLI）`;
-    btn.setAttribute('aria-label', `${a.name}${a.installed ? '' : '，未安装'}`);
+  // Keep the current Agent button and keyboard focus across live status updates.
+  const existing = [...ui.agents.querySelectorAll(':scope > button.agent-button')];
+  const same = sameIdOrder(existing.map(btn => btn.dataset.agentId), state.agents.map(a => a.id));
+  if (!same) clear(ui.agents);
+  state.agents.forEach((a, index) => {
+    const btn = same ? existing[index] : node('button', 'agent-button');
+    btn.dataset.agentId = a.id;
+    btn.className = 'agent-button' + (a.id === state.agentId ? ' selected' : '') + (a.installed ? '' : ' disabled');
+    btn.title = a.installed ? a.description : a.description + '（未检测到 CLI）';
+    btn.setAttribute('aria-label', a.name + (a.installed ? '' : '，未安装'));
     btn.setAttribute('aria-pressed', String(a.id === state.agentId));
-    const avatar = node('span', 'agent-avatar brand-avatar');
-    applyBrandMark(avatar, a.id, a.short);
     btn.style.setProperty('--agent-accent', a.color);
-    const textWrap = node('span', 'agent-copy');
-    textWrap.append(node('span', 'agent-label', a.name === 'Antigravity' ? 'Anti' : a.name === 'Claude Code' ? 'Claude' : a.name));
-    textWrap.append(node('span', 'agent-vendor', agentVendor(a.id)));
-    btn.append(avatar, textWrap);
+    if (!same) {
+      const avatar = node('span', 'agent-avatar brand-avatar');
+      applyBrandMark(avatar, a.id, a.short);
+      const labels = node('span', 'agent-copy');
+      labels.append(node('span', 'agent-label'), node('span', 'agent-vendor'));
+      btn.append(avatar, labels);
+    }
+    btn.querySelector('.agent-label').textContent = a.name === 'Antigravity' ? 'Anti' : a.name === 'Claude Code' ? 'Claude' : a.name;
+    btn.querySelector('.agent-vendor').textContent = agentVendor(a.id);
     btn.onclick = () => void switchAgent(a.id);
-    ui.agents.append(btn);
-  }
+    if (!same) ui.agents.append(btn);
+  });
 }
 function renderProjects() {
-  clear(ui.projectSelect);
-  for (const p of state.projects) {
-    const opt = node('option', '', p.name);
-    opt.value = p.id;
-    ui.projectSelect.append(opt);
+  // Native selects must not be replaced during a live update.
+  const present = [...ui.projectSelect.options];
+  const same = sameIdOrder(present.map(o => o.value), state.projects.map(p => p.id)) &&
+    present.every((o, index) => o.textContent === state.projects[index].name);
+  if (!same) {
+    clear(ui.projectSelect);
+    for (const p of state.projects) {
+      const opt = node('option', '', p.name);
+      opt.value = p.id;
+      ui.projectSelect.append(opt);
+    }
   }
-  if (state.projectId) ui.projectSelect.value = state.projectId;
+  if (state.projectId && document.activeElement !== ui.projectSelect && ui.projectSelect.value !== state.projectId) {
+    ui.projectSelect.value = state.projectId;
+  }
   ui.projectPath.textContent = project()?.path || '请先添加项目';
   ui.projectPath.title = project()?.path || '';
 }
+function sessionSubtitle(s) {
+  return s.status === 'running' ? '执行中' : s.status === 'queued' ? '排队中' :
+    s.status === 'awaiting_approval' ? '待授权' : s.messageCount ? s.messageCount + ' 条消息' : '空会话';
+}
+function updateSessionButton(btn, session) {
+  const active = session.id === state.session?.id;
+  btn.dataset.sessionId = session.id;
+  btn.className = 'session-item' + (active ? ' active' : '');
+  if (active) btn.setAttribute('aria-current', 'true');
+  else btn.removeAttribute('aria-current');
+  btn.setAttribute('aria-label', session.title + '，' + sessionSubtitle(session));
+  if (!btn.firstChild) {
+    const meta = node('div', 'session-meta');
+    const subtitle = node('div', 'session-subtitle');
+    subtitle.append(node('span', 'session-dot'), node('span', 'session-subtitle-text'));
+    meta.append(node('div', 'session-name'), subtitle);
+    btn.append(node('span', 'session-icon', '◌'), meta);
+  }
+  btn.querySelector('.session-name').textContent = session.title;
+  btn.querySelector('.session-dot').className = 'session-dot ' + (session.status || '');
+  btn.querySelector('.session-subtitle-text').textContent = sessionSubtitle(session);
+  btn.onclick = () => void selectSession(session.id);
+}
 function renderSessions() {
-  clear(ui.sessions);
   const all = sessionsForCurrent();
   const query = ui.sessionSearch.value;
   const list = filterSessions(all, query);
-  ui.sessionCount.textContent = query.trim() ? `${list.length}/${all.length}` : String(all.length);
+  ui.sessionCount.textContent = query.trim() ? list.length + '/' + all.length : String(all.length);
+  ui.clearSessionSearch.hidden = !query;
   if (!list.length) {
+    clear(ui.sessions);
     ui.sessions.append(node('div', 'sidebar-empty', all.length
       ? '没有匹配的会话。\n请尝试其他关键词。'
       : '当前 Agent 暂无会话。\n点击「新建会话」开始。'));
     return;
   }
-  for (const s of list) {
-    const btn = node('button', `session-item${s.id === state.session?.id ? ' active' : ''}`);
-    if (s.id === state.session?.id) btn.setAttribute('aria-current', 'true');
-    const icon = node('span', 'session-icon', '◌');
-    const meta = node('div', 'session-meta');
-    meta.append(node('div', 'session-name', s.title));
-    const subtitle = node('div', 'session-subtitle');
-    subtitle.append(node('span', `session-dot ${s.status || ''}`), node('span', '', s.status === 'running' ? '执行中' : s.status === 'queued' ? '排队中' : s.status === 'awaiting_approval' ? '待授权' : s.messageCount ? `${s.messageCount} 条消息` : '空会话'));
-    meta.append(subtitle);
-    btn.append(icon, meta);
-    btn.onclick = () => void selectSession(s.id);
+  const existing = [...ui.sessions.querySelectorAll(':scope > button.session-item')];
+  const same = sameIdOrder(existing.map(btn => btn.dataset.sessionId), list.map(item => item.id));
+  if (same) {
+    list.forEach((item, index) => updateSessionButton(existing[index], item));
+    return;
+  }
+  const focusedSessionId = ui.sessions.contains(document.activeElement)
+    ? document.activeElement.closest('[data-session-id]')?.dataset.sessionId : null;
+  clear(ui.sessions);
+  for (const session of list) {
+    const btn = node('button', 'session-item');
+    updateSessionButton(btn, session);
     ui.sessions.append(btn);
+  }
+  if (focusedSessionId) {
+    for (const btn of ui.sessions.querySelectorAll('[data-session-id]')) {
+      if (btn.dataset.sessionId === focusedSessionId) btn.focus({ preventScroll: true });
+    }
   }
 }
 function renderHeader() {
   const a = agent();
-  applyBrandMark(ui.avatar, a?.id || 'demo', a?.short || 'DE');
+  if (ui.avatar.dataset.agent !== (a?.id || 'demo')) applyBrandMark(ui.avatar, a?.id || 'demo', a?.short || 'DE');
   ui.avatar.style.background = a ? a.color + '1a' : '#394353';
   ui.avatar.style.borderColor = a ? a.color + '55' : '#596575';
   ui.avatar.style.color = a?.color || '#fff';
@@ -304,10 +350,16 @@ function renderAttachments() {
   }
 }
 function renderFiles() {
-  ui.currentDir.textContent = state.currentDir === '.' ? '/' : `/${state.currentDir}`;
+  ui.currentDir.textContent = state.currentDir === '.' ? '/' : '/' + state.currentDir;
+  ui.fileCount.textContent = state.fileLoading ? '读取中' : state.files.length + ' 项';
+  q('#files-back').disabled = state.fileLoading || state.currentDir === '.';
   clear(ui.fileList);
+  if (state.fileLoading) {
+    ui.fileList.append(node('div', 'file-empty', '正在读取项目文件…'));
+    return;
+  }
   if (!state.files.length) {
-    ui.fileList.append(node('div', 'file-empty', '此目录暂无文件'));
+    ui.fileList.append(node('div', 'file-empty', state.searchText ? '没有匹配的文件' : '此目录暂无文件'));
     return;
   }
   for (const file of state.files) {
@@ -329,8 +381,17 @@ function renderPreview() {
   clear(ui.previewContent);
   const p = state.preview;
   ui.previewTitle.textContent = p?.name || '选择文件预览';
-  for (const id of ['#attach-preview', '#reveal-preview', '#download-preview']) q(id).disabled = !p;
+  const ready = Boolean(p && p.kind && !p.loading && !p.error);
+  for (const id of ['#attach-preview', '#reveal-preview', '#download-preview']) q(id).disabled = !ready;
   if (!p) return ui.previewContent.append(node('div', 'preview-empty', '选择文件即可在侧边预览'));
+  if (p.loading) return ui.previewContent.append(node('div', 'preview-empty', '正在读取文件…'));
+  if (p.error) {
+    const message = node('div', 'preview-empty preview-error', p.error);
+    const retry = node('button', 'small-outline', '重试预览');
+    retry.onclick = () => void showPreview(p.path);
+    ui.previewContent.append(message, retry);
+    return;
+  }
   if (p.kind === 'image') {
     const img = node('img');
     img.alt = p.name;
@@ -572,6 +633,7 @@ async function switchAgent(agentId) {
   rememberDraft();
   state.agentId = agentId;
   state.session = null;
+  ui.sessionSearch.value = '';
   renderHeader(); renderConversation();
   const target = sessionsForCurrent()[0];
   if (target) await selectSession(target.id);
@@ -587,6 +649,7 @@ async function switchProject(projectId) {
   rememberDraft();
   state.projectId = projectId;
   state.session = null;
+  ui.sessionSearch.value = '';
   renderHeader(); renderConversation();
   state.attachments = []; state.currentDir = '.';
   state.preview = null; previewEpoch++; state.searchText = ''; ui.search.value = '';
@@ -621,7 +684,9 @@ async function newSession() {
 async function loadFiles() {
   const ticket = ++fileEpoch;
   const snapshot = { projectId: state.projectId, directory: state.currentDir, query: state.searchText };
-  if (!snapshot.projectId) { state.files = []; renderFiles(); return; }
+  if (!snapshot.projectId) { state.files = []; state.fileLoading = false; renderFiles(); return; }
+  state.fileLoading = true;
+  renderFiles();
   try {
     const files = snapshot.query
       ? await api(`/api/projects/${encodeURIComponent(snapshot.projectId)}/search?q=${encodeURIComponent(snapshot.query)}`)
@@ -630,10 +695,11 @@ async function loadFiles() {
       projectId: state.projectId, directory: state.currentDir, query: state.searchText
     })) return;
     state.files = files;
+    state.fileLoading = false;
     renderFiles();
   } catch (err) {
     if (ticket !== fileEpoch) return;
-    state.files = []; renderFiles(); toast(err.message);
+    state.files = []; state.fileLoading = false; renderFiles(); toast(err.message);
   }
 }
 async function openDirectory(relative) {
@@ -645,12 +711,19 @@ async function showPreview(relative) {
   const projectId = state.projectId;
   const ticket = ++previewEpoch;
   if (!projectId) return;
+  state.preview = { name: relative.split('/').at(-1), path: relative, projectId, loading: true };
+  renderPreview();
   try {
-    const result = await api(`/api/projects/${encodeURIComponent(projectId)}/preview?path=${encodeURIComponent(relative)}`);
+    const route = '/api/projects/' + encodeURIComponent(projectId) + '/preview?path=' + encodeURIComponent(relative);
+    const result = await api(route);
     if (ticket !== previewEpoch || state.projectId !== projectId) return;
     state.preview = { ...result, path: relative, projectId };
     renderPreview();
-  } catch (err) { if (ticket === previewEpoch) toast(err.message); }
+  } catch (err) {
+    if (ticket !== previewEpoch || state.projectId !== projectId) return;
+    state.preview = { name: relative.split('/').at(-1), path: relative, projectId, error: err.message };
+    renderPreview();
+  }
 }
 function attachProjectFile(rel) {
   if (!state.session || !agent()?.installed) return toast('请先选择可用的 Agent 会话');
@@ -720,6 +793,30 @@ function bindUI() {
   systemAppearance.addEventListener('change', () => { if (readAppearance() === 'system') applyAppearance('system'); });
   window.addEventListener('storage', event => { if (event.key === appearanceKey) applyAppearance(readAppearance()); });
   ui.sessionSearch.addEventListener('input', renderSessions);
+  ui.clearSessionSearch.onclick = () => { ui.sessionSearch.value = ''; renderSessions(); ui.sessionSearch.focus(); };
+  ui.sessionSearch.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && ui.sessionSearch.value) {
+      event.preventDefault(); event.stopPropagation();
+      ui.sessionSearch.value = ''; renderSessions();
+    } else if (event.key === 'ArrowDown' || event.key === 'Enter') {
+      const first = ui.sessions.querySelector('button.session-item');
+      if (!first) return;
+      event.preventDefault();
+      if (event.key === 'Enter') first.click();
+      else first.focus();
+    }
+  });
+  ui.sessions.addEventListener('keydown', event => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const rows = [...ui.sessions.querySelectorAll('button.session-item')];
+    const index = rows.indexOf(document.activeElement);
+    if (index < 0) return;
+    event.preventDefault();
+    if (event.key === 'ArrowUp' && index === 0) return ui.sessionSearch.focus();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 :
+      Math.min(rows.length - 1, Math.max(0, index + (event.key === 'ArrowDown' ? 1 : -1)));
+    rows[next].focus();
+  });
   document.addEventListener('keydown', event => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
       event.preventDefault();

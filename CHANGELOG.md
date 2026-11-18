@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.0 (2026-11-18)
+
+- Keep Agent rail, project picker and session rows stable across SSE refreshes to preserve keyboard focus and prevent native dropdown flicker.
+- Improve scoped session search: keyboard navigation, Enter activation, Escape/clear and visible results; clear filter on Agent/project scope changes.
+- Add file-browser loading and item counts, preview loading/errors and a retry button; block file actions until preview succeeds.
+- Preserve current CLI/session persistence, worktree authorization and local-only service security.
+- Add pure-state and UI-contract tests. Owner-device browser and authenticated vendor CLI verification remain pending.
+
+
 ## 0.11.0 (2026-11-18)
 
 - Refine AgentDock using the independent apple-ui-design skill and Apple's public HIG; no proprietary Apple resources.

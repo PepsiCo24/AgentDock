@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag } from '../public/ui-state.mjs';
+import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag, sameIdOrder } from '../public/ui-state.mjs';
 
 const projects = [{ id: 'p1' }, { id: 'p2' }];
 const agents = [{ id: 'demo' }, { id: 'codex' }, { id: 'claude' }];
@@ -63,4 +63,13 @@ test('dragging a file across projects cannot reuse its relative file name', () =
   assert.equal(acceptsInternalDrag('p1', 'p2'), false);
   assert.equal(acceptsInternalDrag('', 'p1'), false);
   assert.equal(acceptsInternalDrag(undefined, 'p1'), false);
+});
+
+
+test('sameIdOrder avoids unnecessary rerenders but detects catalog changes', () => {
+  assert.equal(sameIdOrder(['a', 'b'], ['a', 'b']), true);
+  assert.equal(sameIdOrder(['a', 'b'], ['b', 'a']), false);
+  assert.equal(sameIdOrder(['a'], ['a', 'b']), false);
+  assert.equal(sameIdOrder([], []), true);
+  assert.equal(sameIdOrder(null, []), false);
 });

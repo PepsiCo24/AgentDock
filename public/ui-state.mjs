@@ -35,6 +35,13 @@ export function uploadSlots(attachedCount, requestedCount, limit = 12) {
   return Math.min(requestedCount, Math.max(0, limit - attachedCount));
 }
 
+/** Stable row identity avoids recreating focused elements on SSE changes. */
+export function sameIdOrder(existingIds, nextIds) {
+  return Array.isArray(existingIds) && Array.isArray(nextIds) &&
+    existingIds.length === nextIds.length &&
+    existingIds.every((id, index) => id === nextIds[index]);
+}
+
 export function isCurrentFileView(request, current) {
   return request.projectId === current.projectId && request.directory === current.directory && request.query === current.query;
 }
