@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { InputError, resolveProjectFile, Store } from './core.mjs';
 import { createIsolatedWorktree, mirrorAttachments, worktreeChanges } from './worktrees.mjs';
+import { NdjsonDecoder } from './ndjson.mjs';
 
 export const AGENT_CONFIGS = [
   { id: 'demo', name: 'Demo Agent', short: 'DE', color: '#eac08b', description: '本地演示 · 不消耗模型额度' },
@@ -16,6 +17,20 @@ const MODES = new Set(['plan', 'edit']);
 const WORKSPACE_MODES = new Set(['project', 'worktree']);
 const MAX_WORKTREES_PER_SESSION = 30;
 const MAX_OUTPUT = 100_000;
+const TOOL_LABELS = Object.freeze({
+  command_execution: '运行命令', file_change: '更新文件', mcp_tool_call: '扩展工具',
+  web_search: '搜索资料', agent_message: 'Agent 回复', reasoning: '内部推理',
+  tool_use: '调用工具', read_file: '读取文件', write_to_file: '写入文件',
+  run_command: '运行命令', ask_permission: '请求权限', user_input: '用户输入'
+});
+export function validatedRemoteId(remoteId) {
+  if (remoteId === null || remoteId === undefined || remoteId === '') return null;
+  if (typeof remoteId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(remoteId)) {
+    throw new InputError('无效的 Agent 会话 ID，请新建会话重试', 409);
+  }
+  return remoteId;
+}
+
 
 function hasCommand(command) {
   const result = spawnSync(process.platform === 'win32' ? 'where' : 'which', [command], { stdio: 'ignore' });
@@ -44,22 +59,23 @@ export function agentDiagnostics() {
 
 export function buildInvocation(session, projectPath, prompt, mode = 'plan') {
   if (!MODES.has(mode)) throw new InputError('未知执行模式');
+  const resumeId = validatedRemoteId(session.remoteId);
   switch (session.agentId) {
     case 'codex': {
       const args = ['exec', '--json', '--sandbox', mode === 'plan' ? 'read-only' : 'workspace-write', '--skip-git-repo-check'];
-      if (session.remoteId) args.push('resume', session.remoteId);
+      if (resumeId) args.push('resume', resumeId);
       args.push('-');
       return { command: 'codex', args, input: prompt, cwd: projectPath };
     }
     case 'claude': {
-      const args = ['-p', '--verbose', '--output-format', 'stream-json', '--permission-mode', mode === 'plan' ? 'plan' : 'acceptEdits'];
-      if (session.remoteId) args.push('--resume', session.remoteId);
+      const args = ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--permission-mode', mode === 'plan' ? 'plan' : 'acceptEdits'];
+      if (resumeId) args.push('--resume', resumeId);
       args.push(prompt);
       return { command: 'claude', args, input: null, cwd: projectPath };
     }
     case 'antigravity': {
       const args = ['-p', prompt, '--output-format', 'stream-json', '--mode', mode === 'plan' ? 'plan' : 'accept-edits'];
-      if (session.remoteId) args.push('--conversation', session.remoteId);
+      if (resumeId) args.push('--conversation', resumeId);
       return { command: 'agy', args, input: null, cwd: projectPath };
     }
     default: throw new InputError('不支持的 Agent');
@@ -68,55 +84,83 @@ export function buildInvocation(session, projectPath, prompt, mode = 'plan') {
 
 function safeUsage(usage) {
   if (!usage || typeof usage !== 'object') return undefined;
-  const fields = ['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_read_input_tokens', 'total_tokens', 'thinking_tokens'];
+  const fields = ['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_read_input_tokens', 'cache_read_tokens', 'total_tokens', 'thinking_tokens'];
   const out = {};
   for (const k of fields) if (Number.isFinite(usage[k]) && usage[k] >= 0) out[k] = Math.trunc(usage[k]);
   return Object.keys(out).length ? out : undefined;
 }
 
-// Never surface raw tool inputs, command lines or reasoning in UI activity records.
+// Only allow event type/status labels from fixed vocabulary. Never surface raw tool inputs.
 export function interpretEvent(agentId, event) {
   if (!event || typeof event !== 'object') return {};
   if (agentId === 'codex') {
-    if (event.type === 'thread.started' && typeof event.thread_id === 'string') return { remoteId: event.thread_id, activity: '新建 Codex 会话' };
-    if (event.type === 'turn.started') return { activity: '开始运行' };
-    if ((event.type === 'item.started' || event.type === 'item.completed') && event.item?.type && event.item.type !== 'agent_message') {
-      const kind = String(event.item.type).slice(0, 40);
-      return { activity: `${kind} · ${event.type.endsWith('completed') ? '完成' : '运行中'}` };
+    if (event.type === 'thread.started') return {
+      remoteId: validatedRemoteId(event.thread_id), activity: 'Codex 会话已连接', kind: 'session'
+    };
+    if (event.type === 'turn.started') return { activity: '开始运行', kind: 'status' };
+    if (event.type === 'item.started' || event.type === 'item.completed') {
+      const type = event.item?.type;
+      if (type === 'agent_message' && event.type === 'item.completed') {
+        return { append: typeof event.item.text === 'string' ? event.item.text : '' };
+      }
+      if (type && type !== 'agent_message') {
+        return { activity: (TOOL_LABELS[type] || '工具步骤') + ' · ' +
+          (event.type === 'item.completed' ? '完成' : '进行中'), kind: 'tool' };
+      }
     }
-    if (event.type === 'item.completed' && event.item?.type === 'agent_message') return { append: event.item.text || '' };
-    if (event.type === 'turn.completed') return { usage: safeUsage(event.usage), activity: '任务完成' };
-    if (event.type === 'turn.failed' || event.type === 'error') return { error: 'Codex 返回错误，请检查本地 CLI 终端日志', activity: '任务错误' };
+    if (event.type === 'turn.completed') return { usage: safeUsage(event.usage), activity: '本轮完成', kind: 'result' };
+    if (event.type === 'turn.failed' || event.type === 'error') {
+      return { error: 'Codex 返回错误，请在本机终端检查 CLI', activity: '本轮失败', kind: 'error' };
+    }
   }
   if (agentId === 'claude') {
-    const remoteId = typeof event.session_id === 'string' ? event.session_id : undefined;
-    if (event.type === 'system' && event.subtype === 'init') return { remoteId, activity: 'Claude Code 已连接' };
+    const remoteId = validatedRemoteId(event.session_id);
+    if (event.type === 'system' && event.subtype === 'init') return {
+      remoteId, activity: 'Claude 会话已连接', kind: 'session'
+    };
+    if (event.type === 'stream_event' && event.event?.type === 'content_block_delta' &&
+        event.event?.delta?.type === 'text_delta') {
+      const delta = event.event.delta.text;
+      return { remoteId, ...(typeof delta === 'string' ? { append: delta, partial: true } : {}) };
+    }
     if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
       const txt = event.message.content.filter(x => x?.type === 'text').map(x => x.text || '').join('\n');
-      const hasTools = event.message.content.some(x => x?.type === 'tool_use');
-      return { remoteId, ...(txt ? { current: txt } : {}), ...(hasTools ? { activity: '使用工具' } : {}) };
+      const tools = event.message.content.some(x => x?.type === 'tool_use');
+      return { remoteId, ...(txt ? { current: txt } : {}), ...(tools ? { activity: '调用工具', kind: 'tool' } : {}) };
     }
     if (event.type === 'result') return {
       remoteId, final: typeof event.result === 'string' ? event.result : '',
       usage: safeUsage(event.usage),
-      error: event.is_error ? 'Claude Code 任务失败，请检查本地 CLI 终端日志' : undefined,
-      activity: event.is_error ? '任务错误' : '任务完成'
+      error: event.is_error ? 'Claude 任务失败，请在本机终端检查 CLI' : undefined,
+      activity: event.is_error ? '任务失败' : '任务完成',
+      kind: event.is_error ? 'error' : 'result'
     };
     return remoteId ? { remoteId } : {};
   }
   if (agentId === 'antigravity') {
-    if (event.event === 'init') return { remoteId: event.conversation_id, activity: 'Antigravity 已连接' };
+    if (event.event === 'init') return {
+      remoteId: validatedRemoteId(event.conversation_id), activity: 'Antigravity 会话已连接', kind: 'session'
+    };
     if (event.event === 'step_update') {
       const step = event.step_update || {};
-      if (step.step_type === 'agent_response') return { append: step.text_delta || '', usage: safeUsage(step.usage) };
-      return { activity: `${String(step.step_type || '工具').slice(0, 30)} · ${String(step.state || '进行中').slice(0, 15)}`, usage: safeUsage(step.usage) };
+      if (step.step_type === 'agent_response') return {
+        append: typeof step.text_delta === 'string' ? step.text_delta : '', usage: safeUsage(step.usage)
+      };
+      const label = TOOL_LABELS[step.step_type] || 'Agent 步骤';
+      const state = { DONE: '完成', RUNNING: '进行中', IN_PROGRESS: '进行中',
+        ERROR: '失败', FAILED: '失败' }[step.state] || '更新';
+      return { activity: label + ' · ' + state, kind: 'tool', usage: safeUsage(step.usage) };
     }
-    if (event.event === 'result') return {
-      remoteId: event.result?.conversation_id,
-      final: event.result?.response || '', usage: safeUsage(event.result?.usage),
-      error: event.result?.status === 'SUCCESS' ? undefined : 'Antigravity 任务失败，请检查本地 CLI 终端日志',
-      activity: '任务完成'
-    };
+    if (event.event === 'result') {
+      const success = event.result?.status === 'SUCCESS';
+      return {
+        remoteId: validatedRemoteId(event.result?.conversation_id),
+        final: typeof event.result?.response === 'string' ? event.result.response : '',
+        usage: safeUsage(event.result?.usage),
+        error: success ? undefined : 'Antigravity 任务失败，请在本机终端检查 CLI',
+        activity: success ? '任务完成' : '任务失败', kind: success ? 'result' : 'error'
+      };
+    }
   }
   return {};
 }
@@ -135,8 +179,11 @@ export class Runner extends EventEmitter {
   emitUpdate(session) {
     this.emit('change', { sessionId: session.id, status: session.status, queueLength: session.queue.length });
   }
-  activity(session, label) {
-    session.activity = [...(session.activity || []), { at: new Date().toISOString(), label: String(label).slice(0, 90) }].slice(-30);
+  activity(session, label, kind = 'status', jobId = null) {
+    const type = ['status', 'tool', 'result', 'error', 'session'].includes(kind) ? kind : 'status';
+    session.activity = [...(session.activity || []), {
+      at: new Date().toISOString(), label: String(label).slice(0, 90), kind: type, jobId
+    }].slice(-60);
     this.store.save();
     this.emitUpdate(session);
   }
@@ -291,22 +338,30 @@ export class Runner extends EventEmitter {
     let output = '';
     let error = '';
     const previousRemoteId = session.remoteId;
+    const resumedFrom = job.workspaceMode === 'worktree' ? null : (typeof previousRemoteId === 'string' ? previousRemoteId : null);
+    this.store.updateRun(session, job.id, { resumedFrom, resumeMode: job.workspaceMode === 'worktree' ? 'isolated' : resumedFrom ? 'resume' : 'new' });
     let isolated = null;
+    let partialTextReceived = false;
     const update = part => {
       if (part.remoteId && typeof part.remoteId === 'string') {
-        if (isolated) isolated.remoteId = part.remoteId;
-        else session.remoteId = part.remoteId;
+        const remoteId = validatedRemoteId(part.remoteId);
+        if (isolated) isolated.remoteId = remoteId;
+        else session.remoteId = remoteId;
+        this.store.updateRun(session, job.id, { remoteId });
       }
-      if (typeof part.current === 'string') output = part.current;
-      if (typeof part.append === 'string') output += part.append;
-      if (typeof part.final === 'string') output = part.final;
+      if (typeof part.current === 'string' && !partialTextReceived) output = part.current;
+      if (typeof part.append === 'string') {
+        output += part.append;
+        if (part.partial) partialTextReceived = true;
+      }
+      if (typeof part.final === 'string' && (part.final || !output)) output = part.final;
       if (part.error) error = part.error;
       if (part.usage) {
         session.lastRun.usage = part.usage;
         const record = session.runs?.find(r => r.id === job.id);
         if (record) record.usage = part.usage;
       }
-      if (part.activity) this.activity(session, part.activity);
+      if (part.activity) this.activity(session, part.activity, part.kind, job.id);
       output = output.slice(-MAX_OUTPUT);
       session.draft = output;
       this.store.save();
@@ -341,13 +396,27 @@ export class Runner extends EventEmitter {
         const spec = buildInvocation(invocationSession, cwd, prompt, job.mode);
         await new Promise(resolve => {
           let finished = false;
-          let buffer = '';
           let timer;
+          let meaningfulEvents = 0;
+          let terminalEvent = false;
+          const decoder = new NdjsonDecoder(event => {
+            const normalized = interpretEvent(session.agentId, event);
+            if (Object.keys(normalized).length) meaningfulEvents++;
+            if ((session.agentId === 'codex' && event.type === 'turn.completed') ||
+                (session.agentId === 'claude' && event.type === 'result') ||
+                (session.agentId === 'antigravity' && event.event === 'result')) terminalEvent = true;
+            update(normalized);
+          });
           const finish = code => {
             if (finished) return;
             finished = true;
             clearTimeout(timer);
-            if (code !== 0 && !active.cancelled && !error) error = `Agent 退出代码 ${code ?? '未知'}，请在本机终端检查 CLI 状态`;
+            if (code !== 0 && !active.cancelled && !error) {
+              error = 'Agent 退出代码 ' + (code ?? '未知') + '，请在本机终端检查 CLI 状态';
+            }
+            if (code === 0 && (!meaningfulEvents || !terminalEvent) && !active.cancelled && !error) {
+              error = 'CLI 未返回完整的可识别任务结果，请检查本地 CLI 版本兼容性';
+            }
             resolve();
           };
           let child;
@@ -356,7 +425,7 @@ export class Runner extends EventEmitter {
               cwd: spec.cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
               windowsHide: true, env: { ...process.env, NO_COLOR: '1' }
             });
-          } catch (err) { error = err.message; resolve(); return; }
+          } catch { error = '启动 CLI 失败'; resolve(); return; }
           active.child = child;
           timer = setTimeout(() => {
             error = '任务运行超时，已终止';
@@ -364,27 +433,19 @@ export class Runner extends EventEmitter {
           }, this.maxRunMs);
           timer.unref?.();
           child.on('error', err => {
-            error = err.code === 'ENOENT' ? `${spec.command} CLI 未安装或不在 PATH 中` : '启动 CLI 失败';
+            error = err.code === 'ENOENT' ? spec.command + ' CLI 未安装或不在 PATH 中' : '启动 CLI 失败';
             finish(-1);
           });
           child.stdout.on('data', chunk => {
-            buffer += chunk.toString('utf8');
-            if (buffer.length > 1024 * 1024) { error = 'Agent 单条输出超过安全限制'; child.kill('SIGKILL'); return; }
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try { update(interpretEvent(session.agentId, JSON.parse(line))); }
-              catch { /* ignore unrecognized event */ }
+            try { decoder.write(chunk); }
+            catch {
+              error = 'CLI 输出事件超过大小限制或格式错误';
+              child.kill('SIGKILL');
             }
           });
-          // STDERR may contain secrets/command outputs; do not echo it into the UI.
           child.stderr.on('data', () => {});
           child.on('close', code => {
-            if (buffer.trim()) {
-              try { update(interpretEvent(session.agentId, JSON.parse(buffer))); }
-              catch { /* partial trailing line */ }
-            }
+            try { decoder.end(); } catch { if (!error) error = 'CLI 输出事件格式错误'; }
             finish(code);
           });
           if (spec.input === null) child.stdin.end();
@@ -410,7 +471,8 @@ export class Runner extends EventEmitter {
       this.store.updateRun(session, job.id, {
         status: session.lastRun.outcome, durationMs: session.lastRun.durationMs,
         finishedAt: session.lastRun.finishedAt, usage: session.lastRun.usage,
-        error: active.cancelled ? '用户主动停止' : (error || null)
+        error: active.cancelled ? '用户主动停止' : (error || null),
+        remoteId: isolated?.remoteId || session.remoteId || null
       });
       if (output.trim() && !active.cancelled) this.store.addMessage(session, 'assistant', output.trim());
       if (error && !active.cancelled) this.store.addMessage(session, 'system', error);
