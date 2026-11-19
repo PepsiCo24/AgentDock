@@ -111,3 +111,15 @@ test('V0.12 preserves live navigation DOM and gives search/file controls keyboar
   assert.match(html, /id="file-count"/);
   assert.match(html, /aria-controls="session-list"/);
 });
+
+test('V0.13 upload context and persistent Git worktree review are present', () => {
+  assert.match(js, /isCurrentUploadContext\(origin, currentContext\(\)\)/);
+  assert.match(js, /const origin = \{ projectId: state\.projectId, sessionId: state\.session\?\.id, viewEpoch \}/);
+  assert.match(js, /if \(!stillCurrent\(\)\) \{/);
+  assert.match(js, /activityWorkspaceKey\(state\.session\)/);
+  assert.match(js, /renderedActivityWorkspacesKey !== workspaceKey \|\| !ui\.activityList\.querySelector/);
+  assert.match(js, /activityEventKey\(state\.session\)/);
+  assert.match(js, /img\.onerror = \(\) =>/);
+  assert.match(js, /event\.keyCode !== 229/);
+  assert.doesNotMatch(js, /\.innerHTML\s*=/);
+});

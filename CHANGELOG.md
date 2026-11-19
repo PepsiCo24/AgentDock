@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0 (2026-11-19)
+
+- Bind asynchronous file uploads to their original project, session, and navigation epoch so switching sessions cannot misattach a late file.
+- Keep expanded Git worktree reviews and diffs mounted during live activity updates; only refresh event entries when their contents change.
+- Show retryable image-preview load errors, disable submission while attachments upload, and guard Chinese IME Enter keyCode 229.
+- Add pure-state and DOM-execution regression tests; preserve provider CLI arguments and persisted user data format.
+
+
 ## 0.12.0 (2026-11-18)
 
 - Keep Agent rail, project picker and session rows stable across SSE refreshes to preserve keyboard focus and prevent native dropdown flicker.

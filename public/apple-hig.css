@@ -407,3 +407,9 @@ dialog input { background: var(--ui-control); color: var(--ui-fg); border-color:
 @media (pointer: coarse) {
   .session-search-clear { min-width: 42px; min-height: 42px; }
 }
+
+/* V0.13: keep worktree reviews open during live execution updates. */
+.activity-events{min-width:0}
+#attach-file:disabled{cursor:not-allowed;opacity:.56}
+#drop-target[aria-busy="true"]{border-style:dashed}
+.preview-error[role="alert"]{color:var(--danger,#e88d84)}

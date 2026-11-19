@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag, sameIdOrder } from '../public/ui-state.mjs';
+import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag, sameIdOrder, isCurrentUploadContext, activityWorkspaceKey, activityEventKey } from '../public/ui-state.mjs';
 
 const projects = [{ id: 'p1' }, { id: 'p2' }];
 const agents = [{ id: 'demo' }, { id: 'codex' }, { id: 'claude' }];
@@ -72,4 +72,31 @@ test('sameIdOrder avoids unnecessary rerenders but detects catalog changes', () 
   assert.equal(sameIdOrder(['a'], ['a', 'b']), false);
   assert.equal(sameIdOrder([], []), true);
   assert.equal(sameIdOrder(null, []), false);
+});
+
+test('file upload results remain scoped to the originating session and navigation epoch', () => {
+  const start = { projectId: 'p1', sessionId: 's1', viewEpoch: 12 };
+  assert.equal(isCurrentUploadContext(start, { ...start }), true);
+  assert.equal(isCurrentUploadContext(start, { ...start, sessionId: 's2' }), false);
+  assert.equal(isCurrentUploadContext(start, { ...start, projectId: 'p2' }), false);
+  assert.equal(isCurrentUploadContext(start, { ...start, viewEpoch: 13 }), false);
+  assert.equal(isCurrentUploadContext({ projectId: 'p1', sessionId: null, viewEpoch: 12 }, start), false);
+  assert.equal(isCurrentUploadContext(start, null), false);
+});
+
+test('worktree review identity ignores execution stream state, but not a workspace switch', () => {
+  const session = { id: 's1', status: 'running', workspaces: [{ id: 'w1', path: '/tmp/w1' }] };
+  assert.equal(activityWorkspaceKey(session), activityWorkspaceKey({ ...session, status: 'idle' }));
+  assert.equal(activityWorkspaceKey(session), activityWorkspaceKey({ ...session, lastRun: { usage: { total_tokens: 50 } } }));
+  assert.notEqual(activityWorkspaceKey(session), activityWorkspaceKey({ ...session, id: 's2' }));
+  assert.notEqual(activityWorkspaceKey(session), activityWorkspaceKey({ ...session, workspaces: [{ id: 'w2', path: '/tmp/w1' }] }));
+  assert.equal(activityWorkspaceKey(null), null);
+});
+
+test('activity event identity changes only with visible event content', () => {
+  const base = { id: 's1', activity: [{ at: 't1', kind: 'tool', label: '任务开始' }] };
+  assert.equal(activityEventKey(base), activityEventKey({ ...base, lastRun: { usage: { total_tokens: 100 } } }));
+  assert.notEqual(activityEventKey(base), activityEventKey({ ...base, activity: [...base.activity, { at: 't2', kind: 'result', label: '完成' }] }));
+  assert.notEqual(activityEventKey(base), activityEventKey({ ...base, id: 's2' }));
+  assert.equal(activityEventKey(null), null);
 });

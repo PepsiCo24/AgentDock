@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.12 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.13 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
@@ -150,3 +150,11 @@ Read [docs/APPLE_UI_REVIEW.md](docs/APPLE_UI_REVIEW.md) for the design audit and
 ## V0.12 — navigation and file review reliability
 
 AgentDock now keeps existing Agent buttons, the project picker, and session rows in place across live updates when IDs and order are unchanged, preserving keyboard focus. Session search supports ⌘/Ctrl+K to focus, ArrowDown and Enter to open matches, Esc to clear, and a visible clear button. Switching projects or Agents clears the scoped query. File browsing reports loading and item count; preview errors appear inline with explicit retry, and file actions stay disabled until a preview succeeds. These changes do not migrate or delete stored user data. Authenticated vendor CLI E2E checks remain pending on the owner's computer.
+
+## V0.13 稳定性修复
+
+- 文件上传同时绑定发起上传时的项目与会话；切换到同项目的另一会话后，返回的文件不会被误附加。
+- SSE 更新任务活动或 Token 统计时，展开的 Git worktree 更改及文件 diff 不会被自动折叠。
+- 图片预览加载失败时提示重试；上传附件过程中暂时禁用发送动作。
+- 兼容中文输入法 Enter 选字，避免误提交任务。
+- 不变更持久化会话结构、写入审批或供应商 CLI 协议；真实用户设备上的浏览器与 CLI 验收仍需完成。

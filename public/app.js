@@ -1,4 +1,4 @@
-import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag, sameIdOrder } from './ui-state.mjs';
+import { startupSelection, uploadSlots, isCurrentFileView, conversationRenderKey, acceptsInternalDrag, sameIdOrder, isCurrentUploadContext, activityWorkspaceKey, activityEventKey } from './ui-state.mjs';
 import { normalizeAppearance, resolveAppearance, filterSessions } from './appearance.mjs';
 const q = selector => document.querySelector(selector);
 const ui = {
@@ -27,6 +27,8 @@ let uploading = false;
 let creatingSession = false;
 let addingProject = false;
 let renderedConversationKey = null;
+let renderedActivityWorkspacesKey = null;
+let renderedActivityEventsKey = null;
 let viewEpoch = 0;
 let fileEpoch = 0;
 let previewEpoch = 0;
@@ -263,7 +265,10 @@ function renderHeader() {
   if (ui.worktree.disabled) ui.worktree.checked = false;
   const canCompose = Boolean(state.session && a?.installed);
   ui.composer.disabled = !canCompose;
-  ui.send.disabled = !canCompose || sending;
+  ui.send.disabled = !canCompose || sending || uploading;
+  q('#attach-file').disabled = !canCompose || uploading;
+  q('#attach-file').title = uploading ? '文件上传中…' : !canCompose ? '请先选择可用的 Agent 会话' : '上传本地文件';
+  q('#drop-target').setAttribute('aria-busy', String(uploading));
   q('#new-session').disabled = creatingSession || !state.projectId || !a?.installed;
   q('#new-session').title = !a?.installed ? 'CLI is not installed; see diagnostics' : '';
   ui.composer.placeholder = state.session && !a?.installed ? 'CLI unavailable: install it, then refresh diagnostics' : !state.session ? '点击「新建会话」开始' : '给 Agent 发送任务，支持拖入文件...';
@@ -387,6 +392,7 @@ function renderPreview() {
   if (p.loading) return ui.previewContent.append(node('div', 'preview-empty', '正在读取文件…'));
   if (p.error) {
     const message = node('div', 'preview-empty preview-error', p.error);
+    message.setAttribute('role', 'alert');
     const retry = node('button', 'small-outline', '重试预览');
     retry.onclick = () => void showPreview(p.path);
     ui.previewContent.append(message, retry);
@@ -394,18 +400,29 @@ function renderPreview() {
   }
   if (p.kind === 'image') {
     const img = node('img');
+    const ticket = previewEpoch;
     img.alt = p.name;
-    img.src = `/api/projects/${encodeURIComponent(state.projectId)}/raw?path=${encodeURIComponent(p.path)}`;
+    img.onerror = () => {
+      if (ticket !== previewEpoch || state.projectId !== p.projectId ||
+          state.preview?.path !== p.path || state.preview?.error) return;
+      state.preview = { ...p, error: '图片加载失败，请检查文件是否仍存在，然后重试。' };
+      renderPreview();
+    };
+    img.src = `/api/projects/${encodeURIComponent(p.projectId)}/raw?path=${encodeURIComponent(p.path)}`;
     ui.previewContent.append(img);
   } else ui.previewContent.append(node('pre', '', p.content));
 }
 function renderActivity() {
-  clear(ui.activityList);
   const run = state.session?.lastRun;
   const usage = run?.usage;
   ui.runMetrics.textContent = !run ? '暂无执行记录' : `${run.mode === 'edit' ? '可写' : '受限'} · ${run.outcome === 'running' ? '运行中' : run.outcome === 'completed' ? '已完成' : run.outcome === 'stopped' ? '已停止' : '失败'}${run.durationMs == null ? '' : ` · ${(run.durationMs / 1000).toFixed(1)}s`}${usage ? ` · Token: ${usage.total_tokens ?? `${usage.input_tokens || 0} / ${usage.output_tokens || 0}`}` : ''}`;
   const activitySessionId = state.session?.id;
   const workspaces = [...(state.session?.workspaces || [])].reverse().slice(0, 3);
+  const workspaceKey = activityWorkspaceKey(state.session);
+  if (renderedActivityWorkspacesKey !== workspaceKey || !ui.activityList.querySelector('.activity-events')) {
+    renderedActivityWorkspacesKey = workspaceKey;
+    renderedActivityEventsKey = null;
+    clear(ui.activityList);
   for (const workspace of workspaces) {
     const info = node('div', 'workspace-summary');
     info.append(node('strong', '', 'Git 隔离工作区'), node('code', 'workspace-path', workspace.path));
@@ -472,11 +489,18 @@ function renderActivity() {
     info.append(actions);
     ui.activityList.append(info);
   }
+    ui.activityList.append(node('div', 'activity-events'));
+  }
+  const eventsKey = activityEventKey(state.session);
+  if (eventsKey === renderedActivityEventsKey) return;
+  renderedActivityEventsKey = eventsKey;
+  const eventList = ui.activityList.querySelector('.activity-events');
+  clear(eventList);
   for (const event of [...(state.session?.activity || [])].reverse().slice(0, 20)) {
     const item = node('div', `activity-item activity-${event.kind || 'status'}`);
     const marker = ({ tool: '⌘', session: '↔', result: '✓', error: '!', status: '·' })[event.kind] || '·';
     item.append(node('span', 'activity-marker', marker), node('span', 'activity-time', new Date(event.at).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})), node('span', '', event.label));
-    ui.activityList.append(item);
+    eventList.append(item);
   }
 }
 function runStatusText(status) {
@@ -734,34 +758,43 @@ function attachProjectFile(rel) {
   ui.composer.focus();
 }
 async function uploadFiles(files) {
-  const projectId = state.projectId;
-  if (!projectId) return toast('Please add a project first');
-  if (uploading) return toast('File upload already in progress');
+  const origin = { projectId: state.projectId, sessionId: state.session?.id, viewEpoch };
+  if (!origin.projectId) return toast('请先添加本地项目');
+  if (!origin.sessionId || !agent()?.installed) return toast('请先选择可用的 Agent 会话再上传附件');
+  if (uploading) return toast('附件正在上传，请稍后');
+  const currentContext = () => ({ projectId: state.projectId, sessionId: state.session?.id, viewEpoch });
+  const stillCurrent = () => isCurrentUploadContext(origin, currentContext());
+  const projectId = origin.projectId;
   const available = uploadSlots(state.attachments.length, files.length);
   if (!available) return toast('At most 12 attachments per message');
   if (available < files.length) toast(`Only ${available} more attachments fit in this message`);
   uploading = true;
+  renderHeader();
   let completed = 0;
   try {
     for (const file of files.slice(0, available)) {
-      if (state.projectId !== projectId) break;
+      if (!stillCurrent()) break;
       if (file.size > 10 * 1024 * 1024) { toast(`${file.name}: exceeds 10 MB`); continue; }
       try {
         const item = await api(`/api/projects/${encodeURIComponent(projectId)}/upload?name=${encodeURIComponent(file.name)}`, {
           method: 'POST', data: file, binary: true
         });
-        if (state.projectId !== projectId) { toast('Upload finished in the previous project; attachment not added'); break; }
+        if (!stillCurrent()) {
+          toast('上传已完成，但会话已切换；文件未加入新会话。');
+          break;
+        }
         if (state.attachments.length >= 12) break;
         if (!state.attachments.some(a => a.path === item.path)) state.attachments.push(item);
         completed++;
         renderAttachments();
       } catch (err) { toast(`Upload failed: ${err.message}`); }
     }
-    if (completed && state.projectId === projectId) await loadFiles();
-  } finally { uploading = false; }
+    if (completed && stillCurrent()) await loadFiles();
+  } finally { uploading = false; renderHeader(); }
 }
 async function sendMessage() {
   if (sending || !state.session || !agent()?.installed) return;
+  if (uploading) return toast('请等待附件上传完成后再发送');
   const id = state.session.id;
   const raw = ui.composer.value;
   const text = raw.trim();
@@ -859,7 +892,7 @@ function bindUI() {
   q('#send-message').onclick = () => void sendMessage();
   ui.composer.addEventListener('input', rememberDraft);
   ui.composer.addEventListener('keydown', event => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void sendMessage(); }
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); void sendMessage(); }
   });
   q('#approve-task').onclick = async () => {
     if (!state.session?.pendingApproval) return;

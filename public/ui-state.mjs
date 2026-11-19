@@ -45,3 +45,25 @@ export function sameIdOrder(existingIds, nextIds) {
 export function isCurrentFileView(request, current) {
   return request.projectId === current.projectId && request.directory === current.directory && request.query === current.query;
 }
+
+/** An async upload result belongs to the exact view that requested it. */
+export function isCurrentUploadContext(start, current) {
+  return Boolean(start?.projectId && start?.sessionId &&
+    start.projectId === current?.projectId &&
+    start.sessionId === current?.sessionId &&
+    start.viewEpoch === current?.viewEpoch);
+}
+
+/** Stable workspace identity lets the Git change reviewer survive SSE updates. */
+export function activityWorkspaceKey(session) {
+  if (!session?.id) return null;
+  const workspaces = (session.workspaces || []).slice(-3).reverse();
+  return JSON.stringify([session.id, ...workspaces.map(workspace => [workspace.id, workspace.path])]);
+}
+
+/** Event data changes only when a new visible activity entry arrives. */
+export function activityEventKey(session) {
+  if (!session?.id) return null;
+  return JSON.stringify([session.id, ...(session.activity || []).slice(-20).map(event =>
+    [event.at, event.kind, event.label])]);
+}
