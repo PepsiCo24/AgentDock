@@ -26,6 +26,9 @@ let sending = false;
 let uploading = false;
 let creatingSession = false;
 let addingProject = false;
+let approvalBusy = false;
+let stopping = false;
+let stopRequestedFor = null;
 let renderedConversationKey = null;
 let renderedActivityWorkspacesKey = null;
 let renderedActivityEventsKey = null;
@@ -257,10 +260,19 @@ function renderHeader() {
   ));
   const running = state.session?.status === 'running';
   const waiting = state.session?.status === 'awaiting_approval';
-  ui.stop.hidden = !(running || waiting);
-  ui.queue.textContent = running || waiting ? `排队 ${state.session?.queueLength || 0}` : '';
+  const queued = state.session?.status === 'queued';
+  const canStop = running || waiting || queued;
+  if (!canStop && stopRequestedFor === state.session?.id) stopRequestedFor = null;
+  ui.stop.hidden = !canStop;
+  ui.stop.disabled = stopping || (canStop && stopRequestedFor === state.session?.id);
+  ui.stop.textContent = queued ? '× 取消排队' : waiting ? '× 撤回任务' : '■ 停止任务';
+  ui.stop.title = queued ? '取消尚未执行的排队任务' : waiting ? '撤回待授权任务' : '请求停止当前任务';
+  ui.queue.textContent = canStop ? `排队 ${state.session?.queueLength || 0}` : '';
   ui.approvalPanel.hidden = !waiting;
   ui.approvalSummary.textContent = waiting ? state.session.pendingApproval?.summary || '' : '';
+  q('#approve-task').disabled = approvalBusy;
+  q('#reject-task').disabled = approvalBusy;
+  q('#approve-task').textContent = approvalBusy ? '正在提交…' : '批准本次任务';
   ui.worktree.disabled = ui.mode.value !== 'edit';
   if (ui.worktree.disabled) ui.worktree.checked = false;
   const canCompose = Boolean(state.session && a?.installed);
@@ -604,7 +616,12 @@ async function refresh({ bootstrap = false } = {}) {
     if (viewEpoch !== viewAtStart) { requestRefresh(bootstrap); return; }
     if (previousProject !== state.projectId) { state.currentDir = '.'; state.preview = null; previewEpoch++; await loadFiles(); }
     renderAgents(); renderProjects(); renderSessions(); renderHeader(); renderConversation(); renderActivity();
-  } catch (err) { toast(err.message); }
+  } catch (err) {
+    // A dropped SSE connection triggers periodic retry. Avoid a toast every
+    // three seconds while offline; the connection label remains visible.
+    if (state.connected) toast(err.message);
+    else showConnectionStatus(false);
+  }
   finally { state.reloading = false; }
 }
 function requestRefresh(bootstrap = false) {
@@ -620,9 +637,10 @@ function requestRefresh(bootstrap = false) {
 function showConnectionStatus(online) {
   state.connected = online;
   if (ui.connection) {
-    ui.connection.textContent = online ? '● 已同步' : '○ 正在重连';
+    ui.connection.textContent = online ? '● 已同步' : '○ 连接中断 · 自动重连';
     ui.connection.classList.toggle('connection-offline', !online);
   }
+  q('#reconnect-now').hidden = online;
 }
 async function selectSession(id) {
   const ticket = ++viewEpoch;
@@ -820,6 +838,47 @@ async function sendMessage() {
   } catch (err) { toast(err.message); }
   finally { sending = false; renderHeader(); }
 }
+async function submitApproval(action) {
+  if (approvalBusy || !['approve', 'reject'].includes(action)) return;
+  const sessionId = state.session?.id;
+  const jobId = state.session?.pendingApproval?.id;
+  if (!sessionId || !jobId) return;
+  approvalBusy = true;
+  renderHeader();
+  try {
+    await api(`/api/sessions/${sessionId}/${action}`, { method: 'POST', data: { jobId } });
+    // The response succeeded, so no second click should act on the stale
+    // pending approval while a cross-window refresh is still underway.
+    if (state.session?.id === sessionId && state.session.pendingApproval?.id === jobId) {
+      state.session.pendingApproval = null;
+      state.session.status = action === 'approve' ? 'queued' : 'idle';
+      if (action === 'approve') state.session.queueLength = Math.max(1, state.session.queueLength || 0);
+    }
+    requestRefresh();
+  } catch (err) { toast(err.message); requestRefresh(); }
+  finally { approvalBusy = false; renderHeader(); }
+}
+async function stopCurrentTask() {
+  const sessionId = state.session?.id;
+  const priorStatus = state.session?.status;
+  if (stopping || !sessionId || !['queued', 'running', 'awaiting_approval'].includes(priorStatus) || stopRequestedFor === sessionId) return;
+  stopping = true;
+  renderHeader();
+  try {
+    const result = await api(`/api/sessions/${sessionId}/stop`, { method: 'POST', data: {} });
+    if (result.stopped) {
+      stopRequestedFor = sessionId;
+      if (state.session?.id === sessionId && priorStatus !== 'running') {
+        state.session.status = 'stopped';
+        state.session.pendingApproval = null;
+        state.session.queueLength = 0;
+      }
+      toast(priorStatus === 'queued' ? '排队任务已取消' : priorStatus === 'awaiting_approval' ? '待授权任务已撤回' : '已发送停止请求');
+    }
+    requestRefresh();
+  } catch (err) { toast(err.message); }
+  finally { stopping = false; renderHeader(); }
+}
 function bindUI() {
   applyAppearance(readAppearance());
   ui.appearance.addEventListener('change', () => applyAppearance(ui.appearance.value, { persist: true }));
@@ -894,16 +953,8 @@ function bindUI() {
   ui.composer.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); void sendMessage(); }
   });
-  q('#approve-task').onclick = async () => {
-    if (!state.session?.pendingApproval) return;
-    try { await api(`/api/sessions/${state.session.id}/approve`, { method: 'POST', data: { jobId: state.session.pendingApproval.id } }); await refresh(); }
-    catch (err) { toast(err.message); }
-  };
-  q('#reject-task').onclick = async () => {
-    if (!state.session?.pendingApproval) return;
-    try { await api(`/api/sessions/${state.session.id}/reject`, { method: 'POST', data: { jobId: state.session.pendingApproval.id } }); await refresh(); }
-    catch (err) { toast(err.message); }
-  };
+  q('#approve-task').onclick = () => void submitApproval('approve');
+  q('#reject-task').onclick = () => void submitApproval('reject');
   ui.resetRemote.onclick = async () => {
     if (!state.session?.remoteId) return;
     const sid = state.session.id;
@@ -919,11 +970,9 @@ function bindUI() {
     if (!state.session) return toast('请先选择会话');
     window.open(`/?session=${encodeURIComponent(state.session.id)}`, '_blank', 'noopener');
   };
-  q('#stop-task').onclick = async () => {
-    if (!state.session) return;
-    try { await api(`/api/sessions/${state.session.id}/stop`, { method: 'POST', data: {} }); requestRefresh(); }
-    catch (err) { toast(err.message); }
-  };
+  q('#stop-task').onclick = () => void stopCurrentTask();
+  q('#reconnect-now').onclick = () => requestRefresh(true);
+  q('#retry-startup').onclick = () => window.location.reload();
   q('#toggle-inspector').onclick = () => {
     if (isCompact()) {
       ui.app.classList.remove('mobile-sidebar-open');
@@ -1038,7 +1087,9 @@ async function main() {
     events.onerror = () => showConnectionStatus(false);
     setInterval(() => { if (!state.connected) requestRefresh(true); }, 3000);
   } catch (err) {
-    toast(`Initialization failed: ${err.message}`);
+    showConnectionStatus(false);
+    q('#startup-error').hidden = false;
+    q('#startup-error-message').textContent = `无法初始化 AgentDock：${err.message}。请确认本地服务正在运行，然后重试。`;
     console.error(err);
   }
 }

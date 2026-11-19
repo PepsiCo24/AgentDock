@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/PepsiCo24/AgentDock/actions/workflows/ci.yml)
 
-**V0.13 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
+**V0.14 MVP / local-first / Node.js 20+ / 零生产 npm 依赖**
 
 AgentDock 是一个多 Agent 本地工作台：在同一个网页或多个独立浏览器窗口中管理项目与 CLI 会话，查看任务进度，搜索和拖拽文件。支持 Demo、Codex CLI、Claude Code CLI、Antigravity CLI（`agy`）。使用 CLI 已登录的凭据，AgentDock 本身不上传 API Key、不代售模型额度。
 
@@ -158,3 +158,10 @@ AgentDock now keeps existing Agent buttons, the project picker, and session rows
 - 图片预览加载失败时提示重试；上传附件过程中暂时禁用发送动作。
 - 兼容中文输入法 Enter 选字，避免误提交任务。
 - 不变更持久化会话结构、写入审批或供应商 CLI 协议；真实用户设备上的浏览器与 CLI 验收仍需完成。
+
+## V0.14 任务与网络恢复
+
+- 并发执行槽位占满时，排队任务可从页面直接取消，不必等待执行开始。
+- 任务授权/拒绝在提交时临时锁定按钮，避免连续点击触发重复请求。
+- 服务首次启动不可用时显示带重新连接按钮的错误提示；SSE 断开时提供重新同步控件，轮询失败不再每 3 秒反复弹 Toast。
+- 仍为本机单用户工具；真实厂商 CLI 认证运行、浏览器设备验收和系统级桌面拖拽仍需在用户设备完成。

@@ -123,3 +123,17 @@ test('V0.13 upload context and persistent Git worktree review are present', () =
   assert.match(js, /event\.keyCode !== 229/);
   assert.doesNotMatch(js, /\.innerHTML\s*=/);
 });
+
+test('V0.14 exposes queued cancellation, single-submit approval, and recoverable connection controls', () => {
+  assert.match(html, /id="reconnect-now"/);
+  assert.match(html, /id="startup-error"/);
+  assert.match(html, /id="retry-startup"/);
+  assert.match(js, /const queued = state\.session\?\.status === 'queued'/);
+  assert.match(js, /async function submitApproval\(/);
+  assert.match(js, /if \(approvalBusy \|\|/);
+  assert.match(js, /async function stopCurrentTask\(/);
+  assert.match(js, /stopRequestedFor === sessionId/);
+  assert.match(js, /q\('#reconnect-now'\)\.hidden = online/);
+  assert.match(js, /q\('#startup-error'\)\.hidden = false/);
+  assert.doesNotMatch(js, /\.innerHTML\s*=/);
+});

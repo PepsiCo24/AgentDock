@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.0 (2026-11-19)
+
+- Expose cancellation for globally queued tasks; clarify cancel, withdraw, and stop labels by task state.
+- Guard task approval and rejection against accidental double submission; disable actions while request is in flight.
+- Show a recoverable startup error with explicit reconnect, manual sync control for SSE drops, and suppress repeated offline toast spam.
+- Add UI state/DOM tests and HTTP regression for queued-task cancellation; retain persisted data and vendor CLI contracts.
+
+
 ## 0.13.0 (2026-11-19)
 
 - Bind asynchronous file uploads to their original project, session, and navigation epoch so switching sessions cannot misattach a late file.

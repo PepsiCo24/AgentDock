@@ -431,3 +431,31 @@ test('HIG UI assets are local-only and safely content typed', async t => {
   const disallowed = await fetch(`${base}/apple-hig-secret.css`);
   assert.equal(disallowed.status, 404);
 });
+
+test('globally queued task can be cancelled over HTTP before a CLI slot frees up', async t => {
+  const { base, post, project, runner } = await setup(t, { demoDelay: 800 });
+  const ids = [];
+  for (let i = 0; i < 4; i++) {
+    const created = await post('/api/sessions', { projectId: project.id, agentId: 'demo' });
+    assert.equal(created.status, 201);
+    ids.push(created.json.id);
+  }
+  for (let i = 0; i < 4; i++) {
+    const sent = await post(`/api/sessions/${ids[i]}/messages`, { text: `demo job ${i}` });
+    assert.equal(sent.status, 202);
+  }
+  assert.equal(runner.active.size, 3);
+  const pending = await (await fetch(`${base}/api/sessions/${ids[3]}`)).json();
+  assert.equal(pending.status, 'queued');
+  assert.equal(pending.queueLength, 1);
+  const stop = await post(`/api/sessions/${ids[3]}/stop`, {});
+  assert.equal(stop.status, 200);
+  assert.equal(stop.json.stopped, true);
+  const stopped = await (await fetch(`${base}/api/sessions/${ids[3]}`)).json();
+  assert.equal(stopped.status, 'stopped');
+  assert.equal(stopped.queueLength, 0);
+  assert.equal(stopped.messages.some(m => m.role === 'assistant'), false);
+  assert.equal(runner.active.has(ids[3]), false);
+  const history = await (await fetch(`${base}/api/sessions/${ids[3]}/runs`)).json();
+  assert.equal(history.items[0].status, 'stopped');
+});

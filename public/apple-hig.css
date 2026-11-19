@@ -413,3 +413,12 @@ dialog input { background: var(--ui-control); color: var(--ui-fg); border-color:
 #attach-file:disabled{cursor:not-allowed;opacity:.56}
 #drop-target[aria-busy="true"]{border-style:dashed}
 .preview-error[role="alert"]{color:var(--danger,#e88d84)}
+
+/* V0.14: reliable task controls and explicit connection recovery. */
+#reconnect-now[hidden], #startup-error[hidden]{display:none!important}
+#reconnect-now{color:var(--ui-warning);min-width:34px;min-height:34px}
+.startup-error{margin:18px clamp(16px,3vw,36px) 0;padding:16px 20px;display:grid;gap:8px;border:1px solid var(--ui-separator);border-radius:10px;background:var(--ui-surface);color:var(--ui-fg)}
+.startup-error p{margin:0;color:var(--ui-secondary);line-height:1.55;overflow-wrap:anywhere}
+.startup-error button{justify-self:start}
+#stop-task:disabled,#approve-task:disabled,#reject-task:disabled{cursor:wait;opacity:.55}
+@media(max-width:660px){.startup-error{margin-inline:12px;padding:14px}}
